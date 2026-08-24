@@ -28,7 +28,7 @@ selector, no sound controls.
 - [x] Stuck-note guards on blur, tab hide, and pointercancel
 - [x] Keyboard 1–7 for desktop
 - [x] README: how to run, how the theory works, device quirks
-- [ ] Deployed to GitHub Pages — blocked, see below
+- [x] Deployed to GitHub Pages — <https://cameroncrow.github.io/musika/>
 
 ## Decisions
 
@@ -50,11 +50,6 @@ adjustable in Phase 4.
 
 **Chords sit at middle C (MIDI 60).** Comfortable register, and the same
 constant becomes the key root in Phase 3.
-
-## Blocked
-
-GitHub Pages needs a public repository or a paid plan; `musika` is private.
-Either make it public or pick a different host.
 
 ## Related
 

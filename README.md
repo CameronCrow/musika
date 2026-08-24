@@ -4,7 +4,7 @@ A seven-button chord organ that runs in a browser. Every button plays a whole
 chord, all seven chords belong to the same key, so any button sounds fine after
 any other one. There is no wrong note to hit.
 
-**Live:** _(pending deployment — see [Deploying](#deploying))_
+**Live: <https://cameroncrow.github.io/musika/>**
 
 Inspired by the idea behind pocket chord synths like the HiChord; no code or
 assets shared with it.
@@ -132,9 +132,8 @@ the audio code — the only genuinely tricky part — any simpler to read or deb
 
 ## Deploying
 
-The site is static, so GitHub Pages serves the repository root as-is. Pages
-requires either a public repository or a paid plan; this repo is currently
-private.
+GitHub Pages serves the repository root as-is — there is nothing to build. Push
+to `main` and the live site updates a minute or so later.
 
 ## Milestones
 

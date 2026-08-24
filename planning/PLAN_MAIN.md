@@ -26,8 +26,8 @@ Two hard rules the project is built around:
 **Phase 1 complete.** Seven pads playing C major, hold-to-sustain, polyphonic
 and multi-touch via Pointer Events, one square-wave voice per note through a
 lowpass and a limiter. Theory module covered by 12 passing tests (`node --test`).
-Awaiting a deployment target — the repo is private and GitHub Pages needs a
-public repo or a paid plan.
+Live at <https://cameroncrow.github.io/musika/> via GitHub Pages, served from
+the repository root on `main`.
 
 Next: Phase 2, the arpeggiator.
 
