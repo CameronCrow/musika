@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- maximum-scale + user-scalable=no kill pinch zoom and double-tap zoom, both
+     of which fire constantly when you play a grid of buttons with two hands.
+     viewport-fit=cover lets the pads run under the iPhone notch / home bar. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Heptad</title>
+<style>
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #0d0e12;
+    color: #e8e8ef;
+    font: 500 16px/1.2 system-ui, -apple-system, Segoe UI, sans-serif;
+
+    /* A phone wants to treat this page like a document: scroll it, select the
+       text, bounce it at the edges, pop a magnifier on long press. All of that
+       ruins an instrument, so turn the document behaviours off. */
+    touch-action: none;
+    overscroll-behavior: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+  }
+
+  body { display: flex; flex-direction: column; }
+
+  #status {
+    flex: none;
+    padding: max(6px, env(safe-area-inset-top)) 10px 6px;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    color: #8b8fa3;
+    text-align: center;
+  }
+  #status b { color: #e8e8ef; font-weight: 600; }
+
+  #pads {
+    flex: 1;
+    display: grid;
+    gap: 8px;
+    padding: 0 8px max(8px, env(safe-area-inset-bottom));
+    grid-template-columns: repeat(7, 1fr);
+    grid-auto-rows: 1fr;
+    min-height: 0;
+  }
+
+  /* Held upright there isn't room for seven columns, so stack them two wide
+     and let the last chord span the bottom. Turn the phone sideways for the
+     row-of-seven layout, which is the one you can play with two hands. */
+  @media (orientation: portrait) {
+    #pads { grid-template-columns: repeat(2, 1fr); }
+    #pads .pad:last-child { grid-column: span 2; }
+  }
+
+  .pad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border: 1px solid hsl(var(--h) 40% 30%);
+    border-radius: 14px;
+    background: hsl(var(--h) 38% 17%);
+    color: inherit;
+    font: inherit;
+    touch-action: none;
+    cursor: pointer;
+    /* No transition on the way in: a pad must light up the instant it is
+       pressed or the instrument feels laggy. The fade is on release only. */
+    transition: background 140ms ease-out, transform 140ms ease-out;
+  }
+
+  .pad.on {
+    background: hsl(var(--h) 68% 46%);
+    border-color: hsl(var(--h) 80% 70%);
+    transform: scale(0.97);
+    transition: none;
+  }
+
+  .numeral { font-size: clamp(22px, 5vmin, 44px); font-weight: 700; }
+  .chord   { font-size: clamp(13px, 2.6vmin, 22px); opacity: 0.85; }
+  .notes   { font-size: clamp(10px, 1.7vmin, 14px); opacity: 0.5; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+  <div id="status">HEPTAD &mdash; key of <b>C major</b> &middot; hold a pad</div>
+  <div id="pads"></div>
+
+  <!-- Plain scripts, in order: theory first because app.js uses its functions.
+       Deliberately NOT type="module" - module scripts are blocked by browser
+       security when the page is opened straight off disk (file://), and being
+       able to double-click index.html was a requirement. -->
+  <script src="src/theory.js"></script>
+  <script src="src/app.js"></script>
+</body>
+</html>
