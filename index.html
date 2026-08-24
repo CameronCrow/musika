@@ -47,7 +47,7 @@
     flex: 1;
     display: grid;
     gap: 8px;
-    padding: 0 8px max(8px, env(safe-area-inset-bottom));
+    padding: 0 8px;
     grid-template-columns: repeat(7, 1fr);
     grid-auto-rows: 1fr;
     min-height: 0;
@@ -89,11 +89,49 @@
   .numeral { font-size: clamp(22px, 5vmin, 44px); font-weight: 700; }
   .chord   { font-size: clamp(13px, 2.6vmin, 22px); opacity: 0.85; }
   .notes   { font-size: clamp(10px, 1.7vmin, 14px); opacity: 0.5; letter-spacing: 0.06em; }
+
+  .key {
+    margin-top: 4px;
+    padding: 1px 6px;
+    border: 1px solid currentColor;
+    border-radius: 5px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.45;
+  }
+
+  /* --- transport / settings bar --- */
+
+  #controls {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    align-items: center;
+    padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+  }
+
+  .ctl {
+    padding: 8px 14px;
+    border: 1px solid #2c2f3d;
+    border-radius: 10px;
+    background: #171a23;
+    color: #b9bdcc;
+    font: 600 13px/1 system-ui, -apple-system, Segoe UI, sans-serif;
+    touch-action: none;
+    cursor: pointer;
+  }
+  .ctl.active { background: #2f6df6; border-color: #5c8dff; color: #fff; }
 </style>
 </head>
 <body>
   <div id="status">HEPTAD &mdash; key of <b>C major</b> &middot; hold a pad</div>
   <div id="pads"></div>
+  <div id="controls">
+    <button id="rebind" class="ctl" type="button">rebind keys</button>
+  </div>
 
   <!-- Plain scripts, in order: theory first because app.js uses its functions.
        Deliberately NOT type="module" - module scripts are blocked by browser

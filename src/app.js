@@ -112,10 +112,57 @@ function stopChord(voices) {
   }
 }
 
+/* --------------------------------------------------------------- bindings --
+
+   Which key plays which pad. The default is the home row, so the seven chords
+   sit under your seven fingers with no reaching - that matters more than it
+   sounds like it does once you're playing rather than poking.
+
+   Rebindable, and remembered in localStorage so it survives a reload.         */
+
+const DEFAULT_BINDINGS = ['a', 's', 'd', 'f', 'g', 'h', 'j'];
+const BINDINGS_KEY = 'heptad.bindings';
+
+let bindings = loadBindings();
+
+function loadBindings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(BINDINGS_KEY));
+    // Only trust it if it still looks like seven keys - a stale or hand-edited
+    // entry shouldn't be able to leave the instrument unplayable.
+    if (Array.isArray(saved) && saved.length === 7) return saved;
+  } catch (_) { /* private browsing, disabled storage, corrupt JSON - ignore */ }
+  return [...DEFAULT_BINDINGS];
+}
+
+function saveBindings() {
+  try {
+    localStorage.setItem(BINDINGS_KEY, JSON.stringify(bindings));
+  } catch (_) { /* not worth interrupting playing over */ }
+}
+
+/** Reverse lookup, rebuilt whenever the bindings change: key -> pad number. */
+let keyMap = new Map();
+function rebuildKeyMap() {
+  // A pad whose key was stolen by another pad has an empty binding; leave those
+  // out rather than letting every unbound pad answer to the same "" key.
+  keyMap = new Map(
+    bindings.flatMap((key, degree) => (key ? [[key, degree]] : []))
+  );
+}
+rebuildKeyMap();
+
 /* ------------------------------------------------------------------- pads -- */
 
 const padsEl = document.getElementById('pads');
 const statusEl = document.getElementById('status');
+
+const DEFAULT_STATUS = statusEl.innerHTML;
+
+/** Show a message in the top bar, or pass null to put the default line back. */
+function setStatus(message) {
+  statusEl.innerHTML = message ?? DEFAULT_STATUS;
+}
 
 const pads = CHORDS.map((notes, degree) => {
   const pad = document.createElement('button');
@@ -130,12 +177,21 @@ const pads = CHORDS.map((notes, degree) => {
   pad.innerHTML =
     `<span class="numeral">${numeral}</span>` +
     `<span class="chord">${chordName(notes)}</span>` +
-    `<span class="notes">${notes.map(noteName).join(' ')}</span>`;
+    `<span class="notes">${notes.map(noteName).join(' ')}</span>` +
+    `<span class="key"></span>`;
   pad.setAttribute('aria-label', `Chord ${degree + 1}, ${chordName(notes)}`);
 
   padsEl.appendChild(pad);
   return pad;
 });
+
+/** Print each pad's current key on its face. This is how you learn them. */
+function showBindings() {
+  pads.forEach((pad, degree) => {
+    pad.querySelector('.key').textContent =
+      degree === bindingDegree ? 'press a key' : (bindings[degree] || '--');
+  });
+}
 
 /* ------------------------------------------------------------------ input --
 
@@ -165,9 +221,22 @@ function release(id) {
   if (!stillHeld) holding.pad.classList.remove('on');
 }
 
+/* Rebinding state. `bindMode` means the pads are being configured rather than
+   played; `bindingDegree` is the one pad currently waiting to hear a key. */
+let bindMode = false;
+let bindingDegree = null;
+
 pads.forEach((pad, degree) => {
   pad.addEventListener('pointerdown', (e) => {
     e.preventDefault(); // stop the browser turning the press into a scroll
+
+    if (bindMode) {
+      // In bind mode a tap chooses which pad to reassign instead of playing it.
+      bindingDegree = degree;
+      showBindings();
+      setStatus('press the key you want for this pad');
+      return;
+    }
 
     // Capture routes pointerup to this pad even if the finger drifts off it
     // mid-hold, which otherwise leaves the note ringing forever.
@@ -180,15 +249,57 @@ pads.forEach((pad, degree) => {
   pad.addEventListener('pointercancel', up); // finger stolen by a system gesture
 });
 
-// Number keys 1-7, so the thing is playable at a laptop without a touchscreen.
+/** Give `key` to `degree`, taking it off whatever pad had it before. */
+function bindKey(degree, key) {
+  const previous = bindings.indexOf(key);
+  if (previous !== -1 && previous !== degree) bindings[previous] = '';
+  bindings[degree] = key;
+  rebuildKeyMap();
+  saveBindings();
+}
+
+function setBindMode(on) {
+  bindMode = on;
+  bindingDegree = null;
+  releaseAll(); // nothing should still be ringing while you reconfigure
+  rebindBtn.classList.toggle('active', on);
+  rebindBtn.textContent = on ? 'done' : 'rebind keys';
+  setStatus(on ? 'tap a pad, then press a key  (esc to finish)' : null);
+  showBindings();
+}
+
+const rebindBtn = document.getElementById('rebind');
+rebindBtn.addEventListener('click', () => {
+  setBindMode(!bindMode);
+  rebindBtn.blur(); // or the spacebar would keep re-triggering this button
+});
+
 addEventListener('keydown', (e) => {
-  const degree = '1234567'.indexOf(e.key);
-  if (degree === -1 || e.repeat) return;
+  // Leave the browser's own shortcuts alone - ctrl+R must still reload.
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+  if (bindMode) {
+    if (e.key === 'Escape') return setBindMode(false);
+    if (bindingDegree !== null) {
+      e.preventDefault();
+      bindKey(bindingDegree, e.key.toLowerCase());
+      bindingDegree = null;
+      showBindings();
+      setStatus('tap a pad, then press a key  (esc to finish)');
+    }
+    return;
+  }
+
+  const degree = keyMap.get(e.key.toLowerCase());
+  if (degree === undefined) return;
+  e.preventDefault(); // keys like space or / would otherwise do browser things
+  if (e.repeat) return; // holding a key repeats it; a held chord is one press
   press('key' + degree, degree);
 });
+
 addEventListener('keyup', (e) => {
-  const degree = '1234567'.indexOf(e.key);
-  if (degree !== -1) release('key' + degree);
+  const degree = keyMap.get(e.key.toLowerCase());
+  if (degree !== undefined) release('key' + degree);
 });
 
 // Stuck-note insurance: if the page loses focus mid-hold the matching release
@@ -209,7 +320,9 @@ addEventListener('gesturestart', (e) => e.preventDefault());
 padsEl.addEventListener('pointerdown', () => {
   setTimeout(() => {
     if (ctx && ctx.state !== 'running') {
-      statusEl.innerHTML = 'audio blocked &mdash; tap again, or check the silent switch';
+      setStatus('audio blocked &mdash; tap again, or check the silent switch');
     }
   }, 250);
-}, { once: false });
+});
+
+showBindings();

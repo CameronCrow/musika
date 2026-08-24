@@ -17,7 +17,7 @@ assets shared with it.
 Hold a pad and the chord rings. Let go and it stops. Hold several at once, with
 both hands — it's polyphonic and multi-touch.
 
-Status: **milestone 1 of 5**. C major only, one square-wave voice, no
+Status: **milestone 2 of 7**. C major only, one square-wave voice, no
 arpeggiator yet.
 
 ## Running it
@@ -36,8 +36,14 @@ python -m http.server 8777
 
 Then open `http://<your-computer's-LAN-IP>:8777` on the phone.
 
-Playing it at a laptop: number keys **1–7** play the seven chords, held for as
-long as the key is down.
+## Playing it with a keyboard
+
+The seven chords sit on the home row — **A S D F G H J** — held for as long as
+the key is down, and chordable together the same way the pads are.
+
+To change them, hit **rebind keys**, tap a pad, and press the key you want.
+Taking a key from another pad leaves that pad unbound rather than
+double-booking it. Escape finishes. Your layout is remembered in the browser.
 
 ## Tests
 
@@ -91,7 +97,7 @@ the octave wrapping is broken.** That check is in the test suite, run across all
 twelve keys.
 
 Because none of this is a lookup table, changing key means changing one number
-and changing mode means changing one array. That's milestone 3, and it needs no
+and changing mode means changing one array. That's milestone 5, and it needs no
 new theory code.
 
 **Frequency.** `440 * 2 ** ((midi - 69) / 12)`. MIDI 69 is A4, tuned to 440 Hz
@@ -138,7 +144,9 @@ to `main` and the live site updates a minute or so later.
 ## Milestones
 
 - [x] **1** — Seven pads, C major, hold-to-sustain, one synth voice
-- [ ] **2** — Arpeggiator: on/off, tempo, up / down / up-down
-- [ ] **3** — Key and mode selector: all 12 keys, major and minor
-- [ ] **4** — Sound shaping: waveform, filter cutoff, attack/release
-- [ ] **5** — Modifiers: 7ths, octave shift, inversions
+- [x] **2** — Keyboard: home-row bindings, rebindable, remembered
+- [ ] **3** — Looper: record, loop, overdub layers
+- [ ] **4** — Arpeggiator: on/off, tempo, up / down / up-down
+- [ ] **5** — Key and mode selector: all 12 keys, major and minor
+- [ ] **6** — Sound shaping: waveform, filter cutoff, attack/release
+- [ ] **7** — Modifiers: 7ths, octave shift, inversions
