@@ -23,24 +23,33 @@ Two hard rules the project is built around:
 
 ## Current State
 
-**Phase 1 complete.** Seven pads playing C major, hold-to-sustain, polyphonic
-and multi-touch via Pointer Events, one square-wave voice per note through a
-lowpass and a limiter. Theory module covered by 12 passing tests (`node --test`).
-Live at <https://cameroncrow.github.io/musika/> via GitHub Pages, served from
-the repository root on `main`.
+**Phase 4 complete.** Seven pads in any of the 12 keys, major or minor,
+hold-to-sustain, polyphonic and multi-touch via Pointer Events, one square-wave
+voice per note through a lowpass and a limiter. Playable from the keyboard, with
+every pad and every looper control rebindable and remembered. A loop pedal that
+records, loops and overdubs on a look-ahead scheduler, and transposes with the
+key because it stores chord numbers rather than pitches. Theory module covered
+by 15 passing tests (`node --test`). Live at
+<https://cameroncrow.github.io/musika/> via GitHub Pages, served from the
+repository root on `main`.
 
-Next: Phase 2, the arpeggiator.
+Next: Phase 5, the arpeggiator - which reuses the looper's scheduler.
 
 ## Phases
 
 - [[Repos/musika/planning/PHASE_1|PHASE_1]] — playable core (done)
-- Phase 2 — arpeggiator
-- Phase 3 — key and mode selector
-- Phase 4 — sound shaping
-- Phase 5 — chord modifiers
+- [[Repos/musika/planning/PHASE_2|PHASE_2]] — keyboard bindings (done)
+- [[Repos/musika/planning/PHASE_3|PHASE_3]] — looper (done)
+- [[Repos/musika/planning/PHASE_4|PHASE_4]] — bindable transport, key and mode (done)
+- Phase 5 — arpeggiator
+- Phase 6 — sound shaping
+- Phase 7 — chord modifiers
 
 ## Related
 
 - [[Repos/musika/planning/PHASE_1|PHASE_1]]
+- [[Repos/musika/planning/PHASE_2|PHASE_2]]
+- [[Repos/musika/planning/PHASE_3|PHASE_3]]
+- [[Repos/musika/planning/PHASE_4|PHASE_4]]
 - [[Repos/musika/planning/TODO|TODO]]
 - [[musika]]

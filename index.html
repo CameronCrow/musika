@@ -114,6 +114,9 @@
   }
 
   .ctl {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     padding: 8px 14px;
     border: 1px solid #2c2f3d;
     border-radius: 10px;
@@ -123,6 +126,22 @@
     touch-action: none;
     cursor: pointer;
   }
+
+  /* The key that triggers this button, printed on it. */
+  .hint {
+    padding: 2px 5px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: 0.5;
+  }
+  .hint:empty { display: none; }
+
+  /* Native dropdowns on purpose: on a phone these open the OS picker, which is
+     far easier to hit with a thumb than anything worth hand-rolling. */
+  select.ctl { padding: 7px 10px; }
   .ctl.active { background: #2f6df6; border-color: #5c8dff; color: #fff; }
   .ctl.armed  { background: #c0392f; border-color: #ff6b5c; color: #fff; }
   .ctl:disabled { opacity: 0.35; cursor: default; }
@@ -157,10 +176,25 @@
   <div id="pads"></div>
   <div id="loopbar"><div id="loopfill"></div></div>
   <div id="controls">
-    <button id="rec" class="ctl" type="button">record</button>
-    <button id="play" class="ctl" type="button" disabled>play</button>
-    <button id="clear" class="ctl" type="button" disabled>clear</button>
+    <!-- .label is set by looper.js, .hint by app.js - separate spans so the
+         two can't overwrite each other. data-action ties the button to its
+         entry in the key bindings. The hint is aria-hidden so a screen reader
+         reads "record", not "recordspace". -->
+    <button id="rec" class="ctl" type="button" data-action="pedal">
+      <span class="label">record</span><span class="hint" aria-hidden="true"></span>
+    </button>
+    <button id="play" class="ctl" type="button" data-action="playstop" disabled>
+      <span class="label">play</span><span class="hint" aria-hidden="true"></span>
+    </button>
+    <button id="clear" class="ctl" type="button" data-action="clear" disabled>
+      <span class="label">clear</span><span class="hint" aria-hidden="true"></span>
+    </button>
     <span class="spacer"></span>
+    <select id="keysel" class="ctl" aria-label="key"></select>
+    <select id="modesel" class="ctl" aria-label="mode">
+      <option value="major">major</option>
+      <option value="minor">minor</option>
+    </select>
     <button id="rebind" class="ctl" type="button">rebind keys</button>
   </div>
 

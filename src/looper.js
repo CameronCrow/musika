@@ -344,13 +344,14 @@ function updateTransport() {
   const running = isLoopRunning();
   const hasLoop = loopLength > 0;
 
-  recBtn.textContent = PEDAL_LABEL[loopState];
+  // Only the label span - the key hint beside it belongs to app.js.
+  recBtn.querySelector('.label').textContent = PEDAL_LABEL[loopState];
   recBtn.classList.toggle(
     'armed',
     loopState === 'armed' || loopState === 'recording' || loopState === 'overdub'
   );
 
-  playBtn.textContent = running ? 'stop' : 'play';
+  playBtn.querySelector('.label').textContent = running ? 'stop' : 'play';
   playBtn.disabled = !hasLoop;
   clearBtn.disabled = loopState === 'idle';
 

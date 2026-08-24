@@ -36,6 +36,23 @@
 const MAJOR_SCALE = [0, 2, 4, 5, 7, 9, 11];
 
 /*
+ * Natural minor - the same twelve semitones, three of them chosen differently.
+ * Its gaps run 2,1,2,2,1,2,2 instead of 2,2,1,2,2,2,1: the same sequence of
+ * steps as the major scale, just started from a different place in the cycle.
+ * That is literally all "a different mode" means.
+ *
+ * Nothing else in this file changes to support it. Stack every-other-note over
+ * these offsets and the qualities come out
+ *
+ *   minor, diminished, major, minor, minor, major, major
+ *      i        ii*      III    iv     v     VI    VII
+ *
+ * which is the darker-sounding chord set every minor key has - derived, not
+ * looked up, from the one array above.
+ */
+const MINOR_SCALE = [0, 2, 3, 5, 7, 8, 10];
+
+/*
  * Note names, indexed by semitone offset within an octave. We use sharps
  * throughout - F# and Gb are the same key on a piano, and picking one keeps
  * this simple. A engraver writing sheet music would care; an instrument you
@@ -194,7 +211,7 @@ function romanNumeral(notes, degree) {
  */
 if (typeof module !== 'undefined') {
   module.exports = {
-    MAJOR_SCALE, NOTE_NAMES, scaleNote, triad, quality,
+    MAJOR_SCALE, MINOR_SCALE, NOTE_NAMES, scaleNote, triad, quality,
     chordsInKey, midiToFreq, noteName, chordName, romanNumeral,
   };
 }

@@ -17,8 +17,7 @@ assets shared with it.
 Hold a pad and the chord rings. Let go and it stops. Hold several at once, with
 both hands — it's polyphonic and multi-touch.
 
-Status: **milestone 3 of 7**. C major only, one square-wave voice, no
-arpeggiator yet.
+Status: **milestone 4 of 7**. One square-wave voice, no arpeggiator yet.
 
 ## Running it
 
@@ -41,9 +40,14 @@ Then open `http://<your-computer's-LAN-IP>:8777` on the phone.
 The seven chords sit on the home row — **A S D F G H J** — held for as long as
 the key is down, and chordable together the same way the pads are.
 
-To change them, hit **rebind keys**, tap a pad, and press the key you want.
-Taking a key from another pad leaves that pad unbound rather than
-double-booking it. Escape finishes. Your layout is remembered in the browser.
+The looper is on keys too: **space** is the pedal and **escape** plays/stops.
+Clear starts unbound on purpose — it wipes your loop with no undo, so it
+shouldn't be one stray keystroke away.
+
+To change any of them, hit **rebind keys**, tap a pad or a looper button, and
+press the key you want. Taking a key from something else leaves that thing
+unbound rather than double-booking the key. Escape finishes. Every binding is
+printed on the thing it triggers, and your layout is remembered in the browser.
 
 ## The looper
 
@@ -57,7 +61,8 @@ obvious thing:
 | **overdub** | play more on top; it joins the loop when the loop next comes round |
 | **end overdub** | back to plain playback |
 
-**Space** is the pedal, **escape** stops. **Clear** wipes the loop.
+**Space** is the pedal, **escape** plays/stops — both rebindable. **Clear**
+wipes the loop.
 
 The bar under the pads shows where you are in the loop — worth watching, since
 overdubbing in time is much easier when you can see it coming round again. It
@@ -74,6 +79,30 @@ it. Timing on playback is sample-accurate regardless (measured at 0.0000 ms of
 drift over six cycles); see [`src/looper.js`](src/looper.js) for why that takes
 two clocks and not one `setInterval`.
 
+## Changing key
+
+The two dropdowns pick the root (all 12) and the mode (major or minor). The
+status line names the key you're in, and it's remembered across reloads.
+
+**A running loop transposes with you.** Because the looper stores chord *numbers*
+rather than pitches, "chord 5" means the fifth chord of whatever key is selected
+now — so you can record a progression in C major and drop the whole thing into A
+minor while it plays. This wasn't built; it's a consequence of recording the
+performance instead of the audio.
+
+Minor cost exactly one line of theory:
+
+```js
+const MINOR_SCALE = [0, 2, 3, 5, 7, 8, 10];
+```
+
+No new functions, no branches, no chord table. Stacking every-other-note over
+those offsets produces `i ii° III iv v VI VII` on its own — the payoff for
+deriving chords rather than tabulating them.
+
+Keys past F# drop an octave rather than climbing, so no key lands in a shrill
+register.
+
 ## Tests
 
 The theory layer is pure arithmetic with no audio or DOM in it, which makes it
@@ -84,8 +113,9 @@ Node's built-in test runner — no framework, nothing to install:
 node --test
 ```
 
-Twelve tests covering scale generation, triad stacking, octave wrapping in both
-directions, MIDI→frequency, chord naming, and the quality sequence below.
+Fifteen tests covering scale generation, triad stacking, octave wrapping in both
+directions, MIDI→frequency, chord naming, and the quality sequences below — in
+both major and minor, across all twelve keys.
 
 ## How the theory works
 
@@ -126,8 +156,9 @@ the octave wrapping is broken.** That check is in the test suite, run across all
 twelve keys.
 
 Because none of this is a lookup table, changing key means changing one number
-and changing mode means changing one array. That's milestone 5, and it needs no
-new theory code.
+and changing mode means changing one array — which is exactly what the key and
+mode pickers do. Minor's seven chords come out `i ii° III iv v VI VII` without a
+line of new theory code.
 
 **Frequency.** `440 * 2 ** ((midi - 69) / 12)`. MIDI 69 is A4, tuned to 440 Hz
 by convention; twelve semitones doubles the frequency, so one semitone
@@ -180,7 +211,7 @@ to `main` and the live site updates a minute or so later.
 - [x] **1** — Seven pads, C major, hold-to-sustain, one synth voice
 - [x] **2** — Keyboard: home-row bindings, rebindable, remembered
 - [x] **3** — Looper: record, loop, overdub layers
-- [ ] **4** — Arpeggiator: on/off, tempo, up / down / up-down
-- [ ] **5** — Key and mode selector: all 12 keys, major and minor
+- [x] **4** — Bindable transport, and key/mode: all 12 keys, major and minor
+- [ ] **5** — Arpeggiator: on/off, tempo, up / down / up-down
 - [ ] **6** — Sound shaping: waveform, filter cutoff, attack/release
 - [ ] **7** — Modifiers: 7ths, octave shift, inversions

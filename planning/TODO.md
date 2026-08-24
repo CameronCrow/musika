@@ -14,10 +14,11 @@ Milestones for Heptad. One commit per phase.
       remembered across reloads.
 - [x] **Phase 3 — Looper.** Record what you play, loop it, overdub layers on top.
       Look-ahead scheduler against `AudioContext.currentTime`.
-- [ ] **Phase 4 — Arpeggiator.** On/off, tempo control, up / down / up-down
+- [x] **Phase 4 — Bindable transport, and the musical key.** The looper's
+      controls join the key-binding system; key and mode pickers for all 12
+      keys, major and minor. Minor cost one array in theory.js.
+- [ ] **Phase 5 — Arpeggiator.** On/off, tempo control, up / down / up-down
       patterns. Shares the looper's scheduler.
-- [ ] **Phase 5 — Key and mode.** All 12 keys, major and minor. Should need no
-      new theory code, only a second scale pattern and a root selector.
 - [ ] **Phase 6 — Sound shaping.** Waveform choice, filter cutoff,
       attack/release controls.
 - [ ] **Phase 7 — Modifiers.** Add a 7th, octave shift, inversions.
@@ -27,4 +28,6 @@ Milestones for Heptad. One commit per phase.
 - [[Repos/musika/planning/PLAN_MAIN|PLAN_MAIN]]
 - [[Repos/musika/planning/PHASE_1|PHASE_1]]
 - [[Repos/musika/planning/PHASE_2|PHASE_2]]
+- [[Repos/musika/planning/PHASE_3|PHASE_3]]
+- [[Repos/musika/planning/PHASE_4|PHASE_4]]
 - [[musika]]

@@ -8,13 +8,56 @@
 
 /* ---------------------------------------------------------------- the key --
 
-   Milestone 1 is C major and nothing else. MIDI 60 is middle C, which puts the
-   seven chords between middle C and the F above it - a comfortable, unshrill
-   register. The key and mode become selectable in milestone 3; when they do,
-   only these two lines change, because the theory layer never assumed C.      */
+   All twelve keys, major or minor. The theory layer never assumed C, so all
+   this does is pick a root note and a scale pattern and ask it for the chords -
+   there is no per-key chord table anywhere, and adding a third mode later would
+   mean adding one array to theory.js and one <option> to the page.            */
 
-const KEY_ROOT = 60;
-const CHORDS = chordsInKey(KEY_ROOT, MAJOR_SCALE);
+const KEY_STORE = 'heptad.key';
+
+let keyPitch = 0;        // 0-11, where 0 is C
+let keyMode = 'major';
+let keyRoot = 60;        // the MIDI note the chords are built from
+let chords = [];         // the seven triads; rebuilt whenever the key changes
+
+/**
+ * Which octave a key starts in.
+ *
+ * Naively, B major would start a semitone below the C an octave up and put the
+ * whole instrument in a shrill register. Keys past F# drop down an octave
+ * instead of climbing, so every key sits within about a fifth of middle C.
+ */
+function rootMidiFor(pitch) {
+  return 60 + (pitch > 6 ? pitch - 12 : pitch);
+}
+
+function setKey(pitch, mode) {
+  keyPitch = pitch;
+  keyMode = mode;
+  keyRoot = rootMidiFor(pitch);
+
+  // The one line that makes a mode a mode.
+  const pattern = mode === 'minor' ? MINOR_SCALE : MAJOR_SCALE;
+  chords = chordsInKey(keyRoot, pattern);
+
+  releaseAll(); // don't leave the old key's chords ringing under the new one
+  labelPads();
+  setStatus(null);
+
+  try {
+    localStorage.setItem(KEY_STORE, JSON.stringify({ pitch, mode }));
+  } catch (_) { /* not worth interrupting playing over */ }
+}
+
+function loadKey() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY_STORE));
+    if (saved && Number.isInteger(saved.pitch) && saved.pitch >= 0 && saved.pitch < 12) {
+      return saved;
+    }
+  } catch (_) { /* fall through to C major */ }
+  return { pitch: 0, mode: 'major' };
+}
 
 /* --------------------------------------------------------------- the voice --
 
@@ -77,7 +120,7 @@ function ensureAudio() {
 function startChord(degree, when) {
   const now = when ?? ctx.currentTime;
 
-  return CHORDS[degree].map((midi) => {
+  return chords[degree].map((midi) => {
     const osc = ctx.createOscillator();
     osc.type = WAVE;
     osc.frequency.value = midiToFreq(midi);
@@ -125,13 +168,18 @@ function stopChord(voices, when) {
 
 /* --------------------------------------------------------------- bindings --
 
-   Which key plays which pad. The default is the home row, so the seven chords
-   sit under your seven fingers with no reaching - that matters more than it
-   sounds like it does once you're playing rather than poking.
+   Everything a key can be bound to: the seven pads (identified by their chord
+   number) and the looper's controls (identified by name). One list, so the pads
+   and the transport share the same rebinding machinery rather than having two
+   of everything.
 
-   Rebindable, and remembered in localStorage so it survives a reload.         */
+   Pads default to the home row, so the seven chords sit under your seven
+   fingers with no reaching - that matters more than it sounds like it does once
+   you're playing rather than poking. Clear starts unbound on purpose: it wipes
+   your loop, and that shouldn't be one stray keystroke away.                   */
 
-const DEFAULT_BINDINGS = ['a', 's', 'd', 'f', 'g', 'h', 'j'];
+const ACTIONS = [0, 1, 2, 3, 4, 5, 6, 'pedal', 'playstop', 'clear'];
+const DEFAULT_BINDINGS = ['a', 's', 'd', 'f', 'g', 'h', 'j', ' ', 'escape', ''];
 const BINDINGS_KEY = 'heptad.bindings';
 
 let bindings = loadBindings();
@@ -139,9 +187,9 @@ let bindings = loadBindings();
 function loadBindings() {
   try {
     const saved = JSON.parse(localStorage.getItem(BINDINGS_KEY));
-    // Only trust it if it still looks like seven keys - a stale or hand-edited
-    // entry shouldn't be able to leave the instrument unplayable.
-    if (Array.isArray(saved) && saved.length === 7) return saved;
+    // Only trust it if it's still the right shape - a stale entry saved before
+    // the transport was bindable shouldn't leave the instrument half-wired.
+    if (Array.isArray(saved) && saved.length === ACTIONS.length) return saved;
   } catch (_) { /* private browsing, disabled storage, corrupt JSON - ignore */ }
   return [...DEFAULT_BINDINGS];
 }
@@ -152,13 +200,29 @@ function saveBindings() {
   } catch (_) { /* not worth interrupting playing over */ }
 }
 
-/** Reverse lookup, rebuilt whenever the bindings change: key -> pad number. */
+/**
+ * Keys are compared lowercased so shift doesn't matter, and space stays as the
+ * single character the browser reports it as.
+ */
+function normalizeKey(key) {
+  return key.toLowerCase();
+}
+
+/** How a bound key is written on a pad or button. */
+function keyLabel(key) {
+  if (!key) return '--';
+  if (key === ' ') return 'space';
+  if (key === 'escape') return 'esc';
+  return key;
+}
+
+/** Reverse lookup, rebuilt whenever the bindings change: key -> action. */
 let keyMap = new Map();
 function rebuildKeyMap() {
-  // A pad whose key was stolen by another pad has an empty binding; leave those
-  // out rather than letting every unbound pad answer to the same "" key.
+  // Anything whose key was stolen by something else has an empty binding; leave
+  // those out rather than letting every unbound action answer to the same "".
   keyMap = new Map(
-    bindings.flatMap((key, degree) => (key ? [[key, degree]] : []))
+    bindings.flatMap((key, i) => (key ? [[key, ACTIONS[i]]] : []))
   );
 }
 rebuildKeyMap();
@@ -168,14 +232,13 @@ rebuildKeyMap();
 const padsEl = document.getElementById('pads');
 const statusEl = document.getElementById('status');
 
-const DEFAULT_STATUS = statusEl.innerHTML;
-
 /** Show a message in the top bar, or pass null to put the default line back. */
 function setStatus(message) {
-  statusEl.innerHTML = message ?? DEFAULT_STATUS;
+  statusEl.innerHTML = message
+    ?? `HEPTAD &mdash; key of <b>${noteName(keyRoot)} ${keyMode}</b> &middot; hold a pad`;
 }
 
-const pads = CHORDS.map((notes, degree) => {
+const pads = Array.from({ length: MAJOR_SCALE.length }, (_, degree) => {
   const pad = document.createElement('button');
   pad.className = 'pad';
   pad.type = 'button';
@@ -184,23 +247,40 @@ const pads = CHORDS.map((notes, degree) => {
   // pads are told apart at a glance while playing.
   pad.style.setProperty('--h', Math.round((degree * 360) / 7));
 
-  const numeral = romanNumeral(notes, degree);
+  // Filled in by labelPads(), which runs again every time the key changes.
   pad.innerHTML =
-    `<span class="numeral">${numeral}</span>` +
-    `<span class="chord">${chordName(notes)}</span>` +
-    `<span class="notes">${notes.map(noteName).join(' ')}</span>` +
-    `<span class="key"></span>`;
-  pad.setAttribute('aria-label', `Chord ${degree + 1}, ${chordName(notes)}`);
+    '<span class="numeral"></span>' +
+    '<span class="chord"></span>' +
+    '<span class="notes"></span>' +
+    '<span class="key"></span>';
 
   padsEl.appendChild(pad);
   return pad;
 });
 
-/** Print each pad's current key on its face. This is how you learn them. */
+/** Write the current key's chords onto the pads. */
+function labelPads() {
+  chords.forEach((notes, degree) => {
+    const pad = pads[degree];
+    const name = chordName(notes);
+    pad.querySelector('.numeral').textContent = romanNumeral(notes, degree);
+    pad.querySelector('.chord').textContent = name;
+    pad.querySelector('.notes').textContent = notes.map(noteName).join(' ');
+    pad.setAttribute('aria-label', `Chord ${degree + 1}, ${name}`);
+  });
+}
+
+/**
+ * Print every bound key on the thing it triggers - pads on their faces,
+ * transport keys on their buttons. This is how you learn them, and how you can
+ * tell that space is the pedal without reading the README.
+ */
 function showBindings() {
-  pads.forEach((pad, degree) => {
-    pad.querySelector('.key').textContent =
-      degree === bindingDegree ? 'press a key' : (bindings[degree] || '--');
+  ACTIONS.forEach((action, i) => {
+    const slot = typeof action === 'number'
+      ? pads[action].querySelector('.key')
+      : document.querySelector(`[data-action="${action}"] .hint`);
+    slot.textContent = i === bindingIndex ? 'press a key' : keyLabel(bindings[i]);
   });
 }
 
@@ -234,10 +314,17 @@ function release(id) {
   if (!stillHeld) holding.pad.classList.remove('on');
 }
 
-/* Rebinding state. `bindMode` means the pads are being configured rather than
-   played; `bindingDegree` is the one pad currently waiting to hear a key. */
+/* Rebinding state. `bindMode` means the controls are being configured rather
+   than played; `bindingIndex` is the one action waiting to hear a key. */
 let bindMode = false;
-let bindingDegree = null;
+let bindingIndex = null;
+
+/** Choose what the next keypress will be bound to. */
+function bindTarget(index) {
+  bindingIndex = index;
+  showBindings();
+  setStatus('press the key you want for this');
+}
 
 pads.forEach((pad, degree) => {
   pad.addEventListener('pointerdown', (e) => {
@@ -245,9 +332,7 @@ pads.forEach((pad, degree) => {
 
     if (bindMode) {
       // In bind mode a tap chooses which pad to reassign instead of playing it.
-      bindingDegree = degree;
-      showBindings();
-      setStatus('press the key you want for this pad');
+      bindTarget(degree);
       return;
     }
 
@@ -262,22 +347,24 @@ pads.forEach((pad, degree) => {
   pad.addEventListener('pointercancel', up); // finger stolen by a system gesture
 });
 
-/** Give `key` to `degree`, taking it off whatever pad had it before. */
-function bindKey(degree, key) {
+/** Give `key` to one action, taking it off whatever had it before. */
+function bindKey(index, key) {
   const previous = bindings.indexOf(key);
-  if (previous !== -1 && previous !== degree) bindings[previous] = '';
-  bindings[degree] = key;
+  if (previous !== -1 && previous !== index) bindings[previous] = '';
+  bindings[index] = key;
   rebuildKeyMap();
   saveBindings();
 }
 
+const BIND_HINT = 'tap a pad or a looper button, then press a key  (esc to finish)';
+
 function setBindMode(on) {
   bindMode = on;
-  bindingDegree = null;
+  bindingIndex = null;
   releaseAll(); // nothing should still be ringing while you reconfigure
   rebindBtn.classList.toggle('active', on);
   rebindBtn.textContent = on ? 'done' : 'rebind keys';
-  setStatus(on ? 'tap a pad, then press a key  (esc to finish)' : null);
+  setStatus(on ? BIND_HINT : null);
   showBindings();
 }
 
@@ -287,43 +374,48 @@ rebindBtn.addEventListener('click', () => {
   rebindBtn.blur(); // or the spacebar would keep re-triggering this button
 });
 
+// In bind mode, clicking a looper button picks it for rebinding instead of
+// pressing it. Capture phase, so this runs before looper.js's own handler.
+document.getElementById('controls').addEventListener('click', (e) => {
+  if (!bindMode) return;
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  e.stopPropagation();
+  bindTarget(ACTIONS.indexOf(btn.dataset.action));
+}, true);
+
 addEventListener('keydown', (e) => {
   // Leave the browser's own shortcuts alone - ctrl+R must still reload.
   if (e.metaKey || e.ctrlKey || e.altKey) return;
 
   if (bindMode) {
     if (e.key === 'Escape') return setBindMode(false);
-    if (bindingDegree !== null) {
+    if (bindingIndex !== null) {
       e.preventDefault();
-      bindKey(bindingDegree, e.key.toLowerCase());
-      bindingDegree = null;
+      bindKey(bindingIndex, normalizeKey(e.key));
+      bindingIndex = null;
       showBindings();
-      setStatus('tap a pad, then press a key  (esc to finish)');
+      setStatus(BIND_HINT);
     }
     return;
   }
 
-  const degree = keyMap.get(e.key.toLowerCase());
-  if (degree !== undefined) {
-    e.preventDefault(); // keys like space or / would otherwise do browser things
-    if (e.repeat) return; // holding a key repeats it; a held chord is one press
-    press('key' + degree, degree);
-    return;
-  }
+  const action = keyMap.get(normalizeKey(e.key));
+  if (action === undefined) return;
 
-  // Transport shortcuts, checked only after the pads have had their say - if
-  // you bind space to a chord, the chord wins and you use the button instead.
-  if (e.key === ' ') {
-    e.preventDefault(); // space would otherwise scroll, or re-click a button
-    if (!e.repeat) pedal();
-  } else if (e.key === 'Escape' && isLoopRunning()) {
-    togglePlay(); // escape only ever stops; it never starts something
-  }
+  e.preventDefault(); // keys like space would otherwise scroll or re-click
+  if (e.repeat) return; // holding a key repeats it; a held chord is one press
+
+  // Pads are numbers, looper controls are names.
+  if (typeof action === 'number') press('key' + action, action);
+  else if (action === 'pedal') pedal();
+  else if (action === 'playstop') togglePlay();
+  else if (action === 'clear') clearLoop();
 });
 
 addEventListener('keyup', (e) => {
-  const degree = keyMap.get(e.key.toLowerCase());
-  if (degree !== undefined) release('key' + degree);
+  const action = keyMap.get(normalizeKey(e.key));
+  if (typeof action === 'number') release('key' + action);
 });
 
 // Stuck-note insurance: if the page loses focus mid-hold the matching release
@@ -348,5 +440,29 @@ padsEl.addEventListener('pointerdown', () => {
     }
   }, 250);
 });
+
+/* ------------------------------------------------------- key/mode pickers -- */
+
+const keySelect = document.getElementById('keysel');
+const modeSelect = document.getElementById('modesel');
+
+NOTE_NAMES.forEach((name, pitch) => keySelect.add(new Option(name, pitch)));
+
+// Changing key while a loop is running transposes the loop, free of charge:
+// the looper records chord numbers rather than pitches, so "chord 5" just
+// means the fifth chord of whichever key is selected now.
+keySelect.addEventListener('change', () => {
+  setKey(Number(keySelect.value), keyMode);
+  keySelect.blur();
+});
+modeSelect.addEventListener('change', () => {
+  setKey(keyPitch, modeSelect.value);
+  modeSelect.blur();
+});
+
+const startingKey = loadKey();
+keySelect.value = String(startingKey.pitch);
+modeSelect.value = startingKey.mode === 'minor' ? 'minor' : 'major';
+setKey(Number(keySelect.value), modeSelect.value);
 
 showBindings();

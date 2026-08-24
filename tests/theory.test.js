@@ -11,7 +11,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  MAJOR_SCALE, scaleNote, triad, quality,
+  MAJOR_SCALE, MINOR_SCALE, scaleNote, triad, quality,
   chordsInKey, midiToFreq, noteName, chordName, romanNumeral,
 } = require('../src/theory.js');
 
@@ -96,6 +96,35 @@ test('notes are named by semitone within the octave', () => {
 test('the seven chords of C major are named the way sheet music names them', () => {
   const names = chordsInKey(C4, MAJOR_SCALE).map(chordName);
   assert.deepEqual(names, ['C', 'Dm', 'Em', 'F', 'G', 'Am', 'Bdim']);
+});
+
+test('a minor key yields minor diminished major minor minor major major', () => {
+  // The point of deriving chords instead of tabulating them: swapping one array
+  // gives a whole different mode, with no new code in theory.js at all.
+  const qualities = chordsInKey(C4, MINOR_SCALE).map(quality);
+  assert.deepEqual(qualities, [
+    'minor', 'diminished', 'major', 'minor', 'minor', 'major', 'major',
+  ]);
+});
+
+test('that minor sequence also holds in every one of the 12 keys', () => {
+  const expected = [
+    'minor', 'diminished', 'major', 'minor', 'minor', 'major', 'major',
+  ];
+  for (let root = 48; root < 60; root++) {
+    assert.deepEqual(
+      chordsInKey(root, MINOR_SCALE).map(quality), expected,
+      `broken for root MIDI ${root}`
+    );
+  }
+});
+
+test('A minor is the white keys too, starting from A', () => {
+  // A minor uses exactly the same notes as C major, started three semitones
+  // lower - which is why its chords are the same seven chords in a new order.
+  const A3 = 57;
+  const names = chordsInKey(A3, MINOR_SCALE).map(chordName);
+  assert.deepEqual(names, ['Am', 'Bdim', 'C', 'Dm', 'Em', 'F', 'G']);
 });
 
 test('roman numerals carry the quality in their casing', () => {
