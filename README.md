@@ -17,7 +17,7 @@ assets shared with it.
 Hold a pad and the chord rings. Let go and it stops. Hold several at once, with
 both hands — it's polyphonic and multi-touch.
 
-Status: **milestone 2 of 7**. C major only, one square-wave voice, no
+Status: **milestone 3 of 7**. C major only, one square-wave voice, no
 arpeggiator yet.
 
 ## Running it
@@ -44,6 +44,35 @@ the key is down, and chordable together the same way the pads are.
 To change them, hit **rebind keys**, tap a pad, and press the key you want.
 Taking a key from another pad leaves that pad unbound rather than
 double-booking it. Escape finishes. Your layout is remembered in the browser.
+
+## The looper
+
+Works like a guitarist's loop pedal — one button that always does the next
+obvious thing:
+
+| press | what happens |
+| --- | --- |
+| **record** | arms; the loop starts on your first chord, so there's no dead air at the front |
+| **close loop** | the loop is however long you just played for, and starts repeating immediately |
+| **overdub** | play more on top; it joins the loop when the loop next comes round |
+| **end overdub** | back to plain playback |
+
+**Space** is the pedal, **escape** stops. **Clear** wipes the loop.
+
+The bar under the pads shows where you are in the loop — worth watching, since
+overdubbing in time is much easier when you can see it coming round again. It
+turns red while you're overdubbing. Pads light up on their own for notes the
+loop is playing, so you can see your own layers.
+
+What's recorded is **what you played**, not audio: "chord 4 started 1.2 seconds
+in and lasted 0.8 seconds". So overdubbing never degrades no matter how many
+layers you stack, and a loop recorded today will pick up whatever the voice
+sounds like after milestone 6.
+
+There's no quantisation — the loop is exactly as loose or tight as you played
+it. Timing on playback is sample-accurate regardless (measured at 0.0000 ms of
+drift over six cycles); see [`src/looper.js`](src/looper.js) for why that takes
+two clocks and not one `setInterval`.
 
 ## Tests
 
@@ -120,18 +149,23 @@ multiplies it by the twelfth root of two.
   seven, which is the layout you can play with two hands.
 - **Zoom and scroll are disabled** on purpose. A page that scrolls when you drag
   across it can't be played.
+- **A backgrounded tab throttles the loop.** Browsers slow page timers right
+  down when a tab isn't visible. The looper notices and picks back up at the
+  right place, but a loop left running in a hidden tab will stutter while it's
+  hidden. Keep the tab in front while you're playing.
 
 ## Layout
 
 ```
 index.html          the whole UI: markup and CSS
 src/theory.js       music theory — pure functions, no audio, no DOM
-src/app.js          the instrument — audio engine and touch handling
+src/app.js          the instrument — audio engine, input, key bindings
+src/looper.js       record / loop / overdub, and the look-ahead scheduler
 tests/theory.test.js
 planning/           milestones and progress
 ```
 
-Three source files, no dependencies, deliberately. A framework here would add a
+Four source files, no dependencies, deliberately. A framework here would add a
 toolchain, a build step and a node_modules directory to a page whose entire job
 is to draw seven rectangles and open an AudioContext; none of that would make
 the audio code — the only genuinely tricky part — any simpler to read or debug.
@@ -145,7 +179,7 @@ to `main` and the live site updates a minute or so later.
 
 - [x] **1** — Seven pads, C major, hold-to-sustain, one synth voice
 - [x] **2** — Keyboard: home-row bindings, rebindable, remembered
-- [ ] **3** — Looper: record, loop, overdub layers
+- [x] **3** — Looper: record, loop, overdub layers
 - [ ] **4** — Arpeggiator: on/off, tempo, up / down / up-down
 - [ ] **5** — Key and mode selector: all 12 keys, major and minor
 - [ ] **6** — Sound shaping: waveform, filter cutoff, attack/release

@@ -124,20 +124,54 @@
     cursor: pointer;
   }
   .ctl.active { background: #2f6df6; border-color: #5c8dff; color: #fff; }
+  .ctl.armed  { background: #c0392f; border-color: #ff6b5c; color: #fff; }
+  .ctl:disabled { opacity: 0.35; cursor: default; }
+  .spacer { flex: 1; max-width: 24px; }
+
+  /* Position within the loop. Overdubbing in time is much easier when you can
+     see the loop coming round again. */
+  #loopbar {
+    flex: none;
+    height: 3px;
+    margin: 6px 8px 0;
+    border-radius: 2px;
+    background: #1b1e28;
+  }
+  #loopfill {
+    height: 100%;
+    width: 0;
+    border-radius: 2px;
+    background: #4d7fff;
+  }
+  #loopfill.overdub { background: #ff6b5c; }
+
+  /* A pad lit by the loop rather than by your finger. */
+  .pad.looping {
+    background: hsl(var(--h) 55% 33%);
+    border-color: hsl(var(--h) 70% 55%);
+  }
 </style>
 </head>
 <body>
   <div id="status">HEPTAD &mdash; key of <b>C major</b> &middot; hold a pad</div>
   <div id="pads"></div>
+  <div id="loopbar"><div id="loopfill"></div></div>
   <div id="controls">
+    <button id="rec" class="ctl" type="button">record</button>
+    <button id="play" class="ctl" type="button" disabled>play</button>
+    <button id="clear" class="ctl" type="button" disabled>clear</button>
+    <span class="spacer"></span>
     <button id="rebind" class="ctl" type="button">rebind keys</button>
   </div>
 
-  <!-- Plain scripts, in order: theory first because app.js uses its functions.
+  <!-- Plain scripts, in order: theory first because app.js uses its functions,
+       then the looper, which reaches back into app.js for the audio engine
+       (they share one global scope, so the order only matters at load time).
        Deliberately NOT type="module" - module scripts are blocked by browser
        security when the page is opened straight off disk (file://), and being
        able to double-click index.html was a requirement. -->
   <script src="src/theory.js"></script>
   <script src="src/app.js"></script>
+  <script src="src/looper.js"></script>
 </body>
 </html>

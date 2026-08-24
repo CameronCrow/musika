@@ -12,7 +12,7 @@ Milestones for Heptad. One commit per phase.
       Deployed.
 - [x] **Phase 2 — Keyboard.** Home-row bindings by default, rebindable per pad,
       remembered across reloads.
-- [ ] **Phase 3 — Looper.** Record what you play, loop it, overdub layers on top.
+- [x] **Phase 3 — Looper.** Record what you play, loop it, overdub layers on top.
       Look-ahead scheduler against `AudioContext.currentTime`.
 - [ ] **Phase 4 — Arpeggiator.** On/off, tempo control, up / down / up-down
       patterns. Shares the looper's scheduler.

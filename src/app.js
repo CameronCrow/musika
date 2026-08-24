@@ -70,9 +70,12 @@ function ensureAudio() {
 /**
  * Start every note of a chord and return the running voices, so whoever is
  * holding the pad can hand them back to stopChord later.
+ *
+ * `when` is a time on the audio clock. Live playing leaves it out and gets
+ * "now"; the looper passes an exact future time so its notes land in rhythm.
  */
-function startChord(degree) {
-  const now = ctx.currentTime;
+function startChord(degree, when) {
+  const now = when ?? ctx.currentTime;
 
   return CHORDS[degree].map((midi) => {
     const osc = ctx.createOscillator();
@@ -93,22 +96,30 @@ function startChord(degree) {
   });
 }
 
-/** Fade a chord out and free its oscillators. */
-function stopChord(voices) {
+/** Fade a chord out and free its oscillators, now or at a scheduled time. */
+function stopChord(voices, when) {
   const now = ctx.currentTime;
+  const at = when ?? now;
 
   for (const { osc, env } of voices) {
-    // If the pad was stabbed, the attack ramp may still be running. Cancel it,
-    // pin the gain to wherever it actually got to, and fall from there -
-    // otherwise the value jumps and clicks on the way out too.
-    env.gain.cancelScheduledValues(now);
-    env.gain.setValueAtTime(env.gain.value, now);
+    if (at <= now + 0.001) {
+      // Releasing right now. If the pad was stabbed the attack ramp may still
+      // be running, so cancel it, pin the gain to wherever it actually got to,
+      // and fall from there - otherwise the value jumps and clicks.
+      env.gain.cancelScheduledValues(at);
+      env.gain.setValueAtTime(env.gain.value, at);
+    } else {
+      // Releasing at a future time, which means we can't read the gain (it
+      // hasn't happened yet). We don't need to: recorded durations are never
+      // shorter than the attack, so by `at` the envelope is fully open.
+      env.gain.setValueAtTime(VOICE_GAIN, at);
+    }
 
     // setTargetAtTime is an exponential fall: natural-sounding, and it never
     // quite reaches zero, so stop the oscillator once it's inaudible (about
     // eight time constants down) rather than waiting forever.
-    env.gain.setTargetAtTime(0, now, RELEASE);
-    osc.stop(now + RELEASE * 8);
+    env.gain.setTargetAtTime(0, at, RELEASE);
+    osc.stop(at + RELEASE * 8);
   }
 }
 
@@ -208,6 +219,7 @@ function press(id, degree) {
   const pad = pads[degree];
   held.set(id, { pad, voices: startChord(degree) });
   pad.classList.add('on');
+  loopNoteOn(id, degree); // no-op unless the looper is recording
 }
 
 function release(id) {
@@ -215,6 +227,7 @@ function release(id) {
   if (!holding) return;
   held.delete(id);
   stopChord(holding.voices);
+  loopNoteOff(id);
 
   // Two fingers can sit on the same pad; only unlight it when the last one goes.
   const stillHeld = [...held.values()].some((h) => h.pad === holding.pad);
@@ -291,10 +304,21 @@ addEventListener('keydown', (e) => {
   }
 
   const degree = keyMap.get(e.key.toLowerCase());
-  if (degree === undefined) return;
-  e.preventDefault(); // keys like space or / would otherwise do browser things
-  if (e.repeat) return; // holding a key repeats it; a held chord is one press
-  press('key' + degree, degree);
+  if (degree !== undefined) {
+    e.preventDefault(); // keys like space or / would otherwise do browser things
+    if (e.repeat) return; // holding a key repeats it; a held chord is one press
+    press('key' + degree, degree);
+    return;
+  }
+
+  // Transport shortcuts, checked only after the pads have had their say - if
+  // you bind space to a chord, the chord wins and you use the button instead.
+  if (e.key === ' ') {
+    e.preventDefault(); // space would otherwise scroll, or re-click a button
+    if (!e.repeat) pedal();
+  } else if (e.key === 'Escape' && isLoopRunning()) {
+    togglePlay(); // escape only ever stops; it never starts something
+  }
 });
 
 addEventListener('keyup', (e) => {
