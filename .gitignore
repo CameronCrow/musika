@@ -1,0 +1,31 @@
+# outputs
+out/
+
+# notes
+notes/
+
+# logs
+logs/
+*.log
+
+# temporary files
+*.tmp
+
+# Claude
+.claude/
+# OPTIONAL: Remove '#' to ignore CLAUDE.md in the repository
+# CLAUDE.md
+
+# graphify: track the graph itself (graph.json, manifest.json, GRAPH_REPORT.md,
+# graph.html, cost.json) so it persists across machines; ignore regenerable
+# cache + machine-local hook/interpreter state (canonical block - see
+# workforce's git-hooks/README.md; that repo's post-commit hook keeps this in
+# sync automatically once graphify has been run here for the first time)
+graphify-out/cache/
+graphify-out/.graphify_detect.err
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/.commits_since_update
+graphify-out/.needs_update
+graphify-out/.hook_update.log
+graphify-out/20*/
