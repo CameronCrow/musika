@@ -22,13 +22,16 @@
  * Rather than write the arpeggiator twice, both are expressed as the same
  * thing: a HOLD, meaning "this chord is down over this span of time".
  *
- *     { degree, from, until }
+ *     { notes, from, until }
  *
  * A live hold simply has `until = Infinity` until you release it. That one
  * shared idea is why a loop you recorded as block chords starts arpeggiating
- * the moment you switch the arpeggiator on - exactly the same way a loop
- * transposes when you change key. The looper stores what you *did*, and what
- * you did is "hold chord 4", not "play these three frequencies".
+ * the moment you switch the arpeggiator on: the looper hands over a span of
+ * time and a set of pitches, and so does your finger.
+ *
+ * A hold carries pitches rather than a chord number on purpose. A recorded
+ * chord keeps the pitches it was played with, so an arpeggiated loop stays in
+ * the key it was recorded in even after you change key to play over it.
  *
  * ---------------------------------------------------------------------------
  * THE CLOCK
@@ -59,7 +62,7 @@ let arpOn = false;
 let arpPattern = 'up';
 let arpBpm = 120;
 
-let holds = [];        // {degree, from, until, step}
+let holds = [];        // {notes, from, until, step}
 let nextStep = 0;      // audio-clock time of the next step on the grid
 let arpTimer = null;
 
@@ -75,7 +78,9 @@ function stepDur() {
  * in a tenth of a second or may be in a minute - we don't know and don't care.
  */
 function arpHoldOn(id, degree) {
-  holds.push({ id, degree, from: ctx.currentTime, until: Infinity, step: 0 });
+  // Resolved now, against the key that is current now. Changing key releases
+  // everything held anyway, so a live hold can never outlive its own chord.
+  holds.push({ id, notes: [...chords[degree]], from: ctx.currentTime, until: Infinity, step: 0 });
   startArpClock();
 }
 
@@ -88,11 +93,12 @@ function arpHoldOff(id) {
 }
 
 /**
- * A chord the looper already knows the full shape of. No id, because nothing
- * will ever come looking for it - it expires on its own at `until`.
+ * A chord the looper already knows the full shape of, in the pitches it was
+ * recorded with. No id, because nothing will ever come looking for it - it
+ * expires on its own at `until`.
  */
-function arpScheduleHold(degree, from, until) {
-  holds.push({ id: null, degree, from, until, step: 0 });
+function arpScheduleHold(notes, from, until) {
+  holds.push({ id: null, notes, from, until, step: 0 });
   startArpClock();
 }
 
@@ -136,12 +142,11 @@ function arpTick() {
 
 /** Play one note of one hold's chord, at an exact time on the audio clock. */
 function playStep(hold, at) {
-  const notes = chords[hold.degree];
-  const order = arpSequence(arpPattern, notes.length);
+  const order = arpSequence(arpPattern, hold.notes.length);
 
   // `step` counts from the moment this chord went down, not from some global
   // beat - so every chord you play starts its pattern on its own first note.
-  const midi = notes[order[hold.step % order.length]];
+  const midi = hold.notes[order[hold.step % order.length]];
   hold.step++;
 
   // Slightly shorter than a step so consecutive notes separate audibly instead

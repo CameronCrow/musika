@@ -19,7 +19,7 @@ and let the instrument play in something other than C major.
 - [x] Key and mode remembered across reloads
 - [x] Keys past F# drop an octave so no key sits in a shrill register
 - [x] Status line names the current key
-- [x] Verified: a running loop transposes when the key changes
+- [x] Verified: a running loop transposes when the key changes *(superseded - see below)*
 
 ## Decisions
 
@@ -43,6 +43,12 @@ every key sits within about a fifth of middle C.
 looper records chord *numbers*, so "chord 5" means the fifth chord of whatever
 key is selected now. Confirmed live: the same loop played C-E-G / G-B-D in C
 major and A-C-E / E-G-B after switching to A minor.
+
+> **Superseded.** Recorded loops now keep the pitches they were played with, so
+> you can change key and play over a loop without it moving. Recording "chord 4"
+> and letting the key float was under-specified: the performance was "chord 4
+> *of C major*", and the key is half of that. Deliberate transposition, if it is
+> ever wanted, is a button that maps over the stored notes.
 
 ## What minor cost
 

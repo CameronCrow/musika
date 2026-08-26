@@ -29,15 +29,19 @@ t=12.80 to t=13.55). Rather than write the arpeggiator twice, both become the
 same thing:
 
 ```js
-{ degree, from, until }
+{ notes, from, until }
 ```
 
 A live hold just sits at `until = Infinity` until you let go.
 
 That single shared idea is why **a loop recorded as block chords starts
-arpeggiating the moment you switch the arp on** — the same reason it transposes
-when you change key. The looper stores what you *did* ("held chord 4"), never
-what it sounded like. Recording audio instead would have frozen both.
+arpeggiating the moment you switch the arp on**. A hold is a span of time plus a
+set of pitches, and that is all the arpeggiator ever needed — so it treats a
+recorded chord and a held finger identically.
+
+(Holds originally carried a chord *number* and resolved it against the current
+key, which also made loops transpose. Recorded loops now carry their pitches
+instead, so they hold their ground when you change key.)
 
 ## Decisions
 
@@ -82,8 +86,13 @@ driven through a throwaway harness with a fake clock and fake oscillators before
 the UI existed: note order per pattern, step spacing tracking tempo, release,
 hold garbage collection, two chords on one grid, bounded loop holds staying
 inside their span, no burst after a 10-second stall, and a zero BPM not hanging
-the tab. Twelve checks, all passing. Not committed — it stubs half the engine,
+the tab. Fourteen checks, all passing. Not committed — it stubs half the engine,
 so it would rot into a test of its own mocks.
+
+The bounded-loop-hold check originally asserted only *timings*, which let it pass
+while being handed a chord number where pitches were expected and playing
+`undefined` notes. It now asserts the pitches too. A check that can pass on
+garbage is worse than no check.
 
 ## Related
 

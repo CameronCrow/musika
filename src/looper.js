@@ -106,7 +106,11 @@ function loopNoteOn(id, degree) {
     updateTransport();
   }
   if (loopState !== 'recording' && loopState !== 'overdub') return;
-  openNotes.set(id, { degree, start: loopPhase() });
+
+  // Snapshot the actual pitches now, while the key that produced them is still
+  // the current one. What you performed was "chord 4 OF C MAJOR", and the key
+  // is half of that - see the note on loopNoteOff.
+  openNotes.set(id, { degree, notes: [...chords[degree]], start: loopPhase() });
 }
 
 function loopNoteOff(id) {
@@ -128,7 +132,18 @@ function loopNoteOff(id) {
   // scheduled playback can assume the envelope has finished rising.
   dur = Math.max(dur, ATTACK);
 
-  const event = { t: note.start, degree: note.degree, dur };
+  // `notes` is what actually sounds; `degree` survives only so the right pad
+  // lights up. Storing resolved pitches is what makes a recorded loop hold its
+  // ground when you change key afterwards: the loop is the bed you already
+  // played, not something that should shift under you while you play over it.
+  //
+  // It also makes overdubbing in a different key work by construction - each
+  // event carries the key it was played in, so a part added in A minor stays in
+  // A minor over a bed recorded in C major.
+  //
+  // ponytail: no way to deliberately transpose a recorded loop. If that is ever
+  // wanted it is a button that maps over these notes, not a change here.
+  const event = { t: note.start, degree: note.degree, notes: note.notes, dur };
   if (loopState === 'recording') loopEvents.push(event);
   else loopPending.push(event);
 }
@@ -198,16 +213,16 @@ function tick() {
 /** Hand one recorded chord to the audio hardware, stamped with its exact time. */
 function playEvent(event, at) {
   // A recorded chord is a hold over a known span, which is exactly what the
-  // arpeggiator eats. So a loop recorded as block chords arpeggiates the moment
-  // you switch the arp on - the same reason it transposes when you change key.
-  // What was recorded is "you held chord 4", not "these three frequencies".
+  // arpeggiator eats - so a loop recorded as block chords arpeggiates the
+  // moment you switch the arp on. The arp works on whatever pitches the event
+  // carries, so an arpeggiated loop stays in its recorded key too.
   if (arpOn) {
-    arpScheduleHold(event.degree, at, at + event.dur);
+    arpScheduleHold(event.notes, at, at + event.dur);
     flashPad(event.degree, at, event.dur);
     return;
   }
 
-  const voices = startChord(event.degree, at);
+  const voices = startNotes(event.notes, at);
   stopChord(voices, at + event.dur);
   sounding.push({ voices, endsAt: at + event.dur + RELEASE * 8 });
   flashPad(event.degree, at, event.dur);

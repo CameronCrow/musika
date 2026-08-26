@@ -27,8 +27,9 @@ Two hard rules the project is built around:
 hold-to-sustain, polyphonic and multi-touch via Pointer Events, one square-wave
 voice per note through a lowpass and a limiter. Playable from the keyboard, with
 every pad and every looper control rebindable and remembered. A loop pedal that
-records, loops and overdubs on a look-ahead scheduler, and transposes with the
-key because it stores chord numbers rather than pitches. Theory module covered
+records, loops and overdubs on a look-ahead scheduler; recorded chords keep the
+pitches they were played with, so a loop holds its ground when you change key to
+play over it. Theory module covered
 by 15 passing tests (`node --test`). Live at
 <https://cameroncrow.github.io/musika/> via GitHub Pages, served from the
 repository root on `main`.

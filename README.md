@@ -113,9 +113,9 @@ changes is that three notes at once is a *texture* and three notes in a row is a
 sound like finished music rather than someone leaning on an organ.
 
 **Loops arpeggiate too.** Record a progression as block chords, then switch the
-arp on, and the loop starts arpeggiating — for the same reason it transposes
-when you change key. The looper stored *"you held chord 4"*, not three
-frequencies.
+arp on, and the loop starts arpeggiating. What the looper stored was a span of
+time and a set of pitches, which is exactly what the arpeggiator eats — so it
+works on a recorded chord and a held finger identically.
 
 Two details worth knowing: hold two pads at once and you get two arpeggios in
 lockstep rather than one merged run; and toggling the arp lets go of anything
@@ -131,11 +131,13 @@ instead of a pulse.
 The two dropdowns pick the root (all 12) and the mode (major or minor). The
 status line names the key you're in, and it's remembered across reloads.
 
-**A running loop transposes with you.** Because the looper stores chord *numbers*
-rather than pitches, "chord 5" means the fifth chord of whatever key is selected
-now — so you can record a progression in C major and drop the whole thing into A
-minor while it plays. This wasn't built; it's a consequence of recording the
-performance instead of the audio.
+**A recorded loop stays put.** It keeps the pitches it was played with, so you
+can lay down a progression in C major, switch to A minor, and play over the top
+of it without the bed shifting under you. Each recorded chord captures its own
+key at the moment you play it — which also means you can overdub a part in a
+different key from the one the loop was recorded in, and both keep their own.
+
+Only your live playing follows the selector.
 
 Minor cost exactly one line of theory:
 

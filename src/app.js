@@ -118,10 +118,20 @@ function ensureAudio() {
  * "now"; the looper passes an exact future time so its notes land in rhythm.
  */
 function startChord(degree, when) {
+  return startNotes(chords[degree], when);
+}
+
+/**
+ * Sound an explicit list of MIDI notes together.
+ *
+ * The looper plays through here rather than through startChord, because a
+ * recorded chord carries the pitches it was played with - see loopNoteOff.
+ */
+function startNotes(notes, when) {
   // One `now` for the whole chord: read the clock per-note and the three notes
   // would start microseconds apart, which is a phasing artefact, not a chord.
   const now = when ?? ctx.currentTime;
-  return chords[degree].map((midi) => startVoice(midi, now));
+  return notes.map((midi) => startVoice(midi, now));
 }
 
 /**
