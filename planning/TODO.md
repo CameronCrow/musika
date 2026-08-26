@@ -23,6 +23,15 @@ Milestones for Heptad. One commit per phase.
       attack/release controls.
 - [ ] **Phase 7 — Modifiers.** Add a 7th, octave shift, inversions.
 
+## Outside the phases
+
+- [x] **Installable.** Web app manifest, generated icons, and a service worker
+      that caches the eight files the instrument needs. Installs as a desktop
+      app from Chrome/Edge and as a home-screen app on iOS, and plays offline.
+      Chosen over Tauri: a Tauri shell would have been ~20 lines of Rust that
+      open a window, leaving the audio identical, in exchange for a toolchain,
+      a build step, and losing `file://`.
+
 ## Related
 
 - [[Repos/musika/planning/PLAN_MAIN|PLAN_MAIN]]

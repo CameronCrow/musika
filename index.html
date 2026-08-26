@@ -7,7 +7,19 @@
      viewport-fit=cover lets the pads run under the iPhone notch / home bar. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0d0e12">
+
+<!-- Installability. The standard tags, plus Apple's own: iOS ignores the web
+     manifest for Add to Home Screen and reads these instead, so both sets have
+     to be here for the icon and the chromeless window to work everywhere. -->
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Heptad">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+
 <title>Heptad</title>
 <style>
   * { box-sizing: border-box; }
@@ -207,5 +219,20 @@
   <script src="src/theory.js"></script>
   <script src="src/app.js"></script>
   <script src="src/looper.js"></script>
+
+  <script>
+    // Registers the offline cache, and is part of what makes a browser offer to
+    // install this as an app. Guarded on the protocol because service workers
+    // don't exist on file:// - opening index.html off disk skips this entirely
+    // and works exactly as it always did.
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+      addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {
+          // Nothing to do and nothing worth saying: the instrument works fine
+          // without it, you just don't get offline play.
+        });
+      });
+    }
+  </script>
 </body>
 </html>
