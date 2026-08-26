@@ -158,6 +158,30 @@ function chordsInKey(rootMidi, pattern) {
 }
 
 /**
+ * The order a chord's notes are played in when arpeggiated, as indices into the
+ * chord. Nothing here knows what a note is - it's pure index arithmetic, which
+ * is exactly why it can be tested without an audio device.
+ *
+ *   up       0 1 2       C E G   C E G   ...
+ *   down     2 1 0       G E C   G E C   ...
+ *   up-down  0 1 2 1     C E G E C E G E ...
+ *
+ * Up-down deliberately drops the repeat of the top and bottom notes. The naive
+ * version, 0 1 2 2 1 0, plays the top note twice in a row and the turnaround
+ * stumbles - you hear a limp instead of a pulse. Omitting the duplicates keeps
+ * every step the same length, which is what makes it read as rhythm at all.
+ *
+ * Chords shorter than three notes have no interior notes to bounce off, so
+ * up-down is simply up.
+ */
+function arpSequence(pattern, length) {
+  const up = Array.from({ length }, (_, i) => i);
+  if (pattern === 'down') return up.slice().reverse();
+  if (pattern !== 'updown') return up;   // 'up', and anything unrecognised
+  return length < 3 ? up : up.concat(up.slice(1, -1).reverse());
+}
+
+/**
  * MIDI note number -> frequency in hertz, which is what an oscillator wants.
  *
  * Anchor: MIDI 69 is A4, tuned to 440 Hz by convention. Going up 12 semitones
@@ -211,7 +235,7 @@ function romanNumeral(notes, degree) {
  */
 if (typeof module !== 'undefined') {
   module.exports = {
-    MAJOR_SCALE, MINOR_SCALE, NOTE_NAMES, scaleNote, triad, quality,
+    MAJOR_SCALE, MINOR_SCALE, NOTE_NAMES, scaleNote, triad, quality, arpSequence,
     chordsInKey, midiToFreq, noteName, chordName, romanNumeral,
   };
 }

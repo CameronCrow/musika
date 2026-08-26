@@ -13,7 +13,7 @@
 
 // Bump this when the cached files change. The old cache is deleted on activate,
 // which is the entire cache-invalidation strategy and all this needs.
-const CACHE = 'heptad-v1';
+const CACHE = 'heptad-v2';
 
 const FILES = [
   './',
@@ -22,6 +22,7 @@ const FILES = [
   './src/theory.js',
   './src/app.js',
   './src/looper.js',
+  './src/arp.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];

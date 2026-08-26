@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 
 const {
   MAJOR_SCALE, MINOR_SCALE, scaleNote, triad, quality,
-  chordsInKey, midiToFreq, noteName, chordName, romanNumeral,
+  chordsInKey, midiToFreq, noteName, chordName, romanNumeral, arpSequence,
 } = require('../src/theory.js');
 
 const C4 = 60; // middle C
@@ -125,6 +125,49 @@ test('A minor is the white keys too, starting from A', () => {
   const A3 = 57;
   const names = chordsInKey(A3, MINOR_SCALE).map(chordName);
   assert.deepEqual(names, ['Am', 'Bdim', 'C', 'Dm', 'Em', 'F', 'G']);
+});
+
+test('arpeggiator patterns walk a triad in the right order', () => {
+  assert.deepEqual(arpSequence('up', 3), [0, 1, 2]);
+  assert.deepEqual(arpSequence('down', 3), [2, 1, 0]);
+
+  // Up-down does NOT repeat the endpoints: 0 1 2 1, never 0 1 2 2 1 0.
+  // Repeating them makes the turnaround stumble and kills the pulse.
+  assert.deepEqual(arpSequence('updown', 3), [0, 1, 2, 1]);
+});
+
+test('up-down still turns around correctly on a four-note chord', () => {
+  // Matters from milestone 7 onward, when a 7th makes chords four notes long.
+  assert.deepEqual(arpSequence('updown', 4), [0, 1, 2, 3, 2, 1]);
+});
+
+test('arpeggiator patterns degrade safely on short chords', () => {
+  // Nothing to bounce off with fewer than three notes, so up-down is just up.
+  assert.deepEqual(arpSequence('updown', 2), [0, 1]);
+  assert.deepEqual(arpSequence('updown', 1), [0]);
+  assert.deepEqual(arpSequence('down', 1), [0]);
+  assert.deepEqual(arpSequence('up', 0), []);
+  assert.deepEqual(arpSequence('updown', 0), []);
+});
+
+test('an unknown pattern falls back to up rather than producing nothing', () => {
+  // A stale value in localStorage must never leave the arpeggiator silent.
+  assert.deepEqual(arpSequence('sideways', 3), [0, 1, 2]);
+  assert.deepEqual(arpSequence(undefined, 3), [0, 1, 2]);
+});
+
+test('every arpeggiator step indexes a note that actually exists', () => {
+  // The sequence is used as chord[i] - an out-of-range index would be silence
+  // or a crash, and a missing index would be a note you can never hear.
+  for (const pattern of ['up', 'down', 'updown']) {
+    for (let n = 1; n <= 5; n++) {
+      const seq = arpSequence(pattern, n);
+      assert.ok(seq.every((i) => Number.isInteger(i) && i >= 0 && i < n),
+        `${pattern}/${n} produced an out-of-range index: ${seq}`);
+      assert.equal(new Set(seq).size, n,
+        `${pattern}/${n} never plays every note: ${seq}`);
+    }
+  }
 });
 
 test('roman numerals carry the quality in their casing', () => {

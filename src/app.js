@@ -118,25 +118,34 @@ function ensureAudio() {
  * "now"; the looper passes an exact future time so its notes land in rhythm.
  */
 function startChord(degree, when) {
+  // One `now` for the whole chord: read the clock per-note and the three notes
+  // would start microseconds apart, which is a phasing artefact, not a chord.
+  const now = when ?? ctx.currentTime;
+  return chords[degree].map((midi) => startVoice(midi, now));
+}
+
+/**
+ * One oscillator, one envelope, running. The arpeggiator starts notes one at a
+ * time rather than three at once, so this is split out of startChord.
+ */
+function startVoice(midi, when) {
   const now = when ?? ctx.currentTime;
 
-  return chords[degree].map((midi) => {
-    const osc = ctx.createOscillator();
-    osc.type = WAVE;
-    osc.frequency.value = midiToFreq(midi);
+  const osc = ctx.createOscillator();
+  osc.type = WAVE;
+  osc.frequency.value = midiToFreq(midi);
 
-    const env = ctx.createGain();
+  const env = ctx.createGain();
 
-    // TRAP: jumping gain straight to full volume steps the waveform
-    // discontinuously, and a discontinuity is literally a click. Ramp instead -
-    // 12ms is short enough to feel instant and long enough to be silent.
-    env.gain.setValueAtTime(0, now);
-    env.gain.linearRampToValueAtTime(VOICE_GAIN, now + ATTACK);
+  // TRAP: jumping gain straight to full volume steps the waveform
+  // discontinuously, and a discontinuity is literally a click. Ramp instead -
+  // 12ms is short enough to feel instant and long enough to be silent.
+  env.gain.setValueAtTime(0, now);
+  env.gain.linearRampToValueAtTime(VOICE_GAIN, now + ATTACK);
 
-    osc.connect(env).connect(master);
-    osc.start(now);
-    return { osc, env };
-  });
+  osc.connect(env).connect(master);
+  osc.start(now);
+  return { osc, env };
 }
 
 /** Fade a chord out and free its oscillators, now or at a scheduled time. */
@@ -169,17 +178,17 @@ function stopChord(voices, when) {
 /* --------------------------------------------------------------- bindings --
 
    Everything a key can be bound to: the seven pads (identified by their chord
-   number) and the looper's controls (identified by name). One list, so the pads
-   and the transport share the same rebinding machinery rather than having two
-   of everything.
+   number) and the switches - looper transport and the arpeggiator - identified
+   by name. One list, so every control shares the same rebinding machinery
+   rather than having two or three of everything.
 
    Pads default to the home row, so the seven chords sit under your seven
    fingers with no reaching - that matters more than it sounds like it does once
    you're playing rather than poking. Clear starts unbound on purpose: it wipes
    your loop, and that shouldn't be one stray keystroke away.                   */
 
-const ACTIONS = [0, 1, 2, 3, 4, 5, 6, 'pedal', 'playstop', 'clear'];
-const DEFAULT_BINDINGS = ['a', 's', 'd', 'f', 'g', 'h', 'j', ' ', 'escape', ''];
+const ACTIONS = [0, 1, 2, 3, 4, 5, 6, 'pedal', 'playstop', 'clear', 'arp'];
+const DEFAULT_BINDINGS = ['a', 's', 'd', 'f', 'g', 'h', 'j', ' ', 'escape', '', 'q'];
 const BINDINGS_KEY = 'heptad.bindings';
 
 let bindings = loadBindings();
@@ -187,9 +196,18 @@ let bindings = loadBindings();
 function loadBindings() {
   try {
     const saved = JSON.parse(localStorage.getItem(BINDINGS_KEY));
-    // Only trust it if it's still the right shape - a stale entry saved before
-    // the transport was bindable shouldn't leave the instrument half-wired.
-    if (Array.isArray(saved) && saved.length === ACTIONS.length) return saved;
+    if (Array.isArray(saved) && saved.length <= ACTIONS.length) {
+      // Saves from before a new bindable control existed are simply shorter.
+      // Keep the layout that's there and fill only the genuinely new slots from
+      // the defaults - and only when that default key isn't already spoken for,
+      // since two actions on one key means the later one silently wins.
+      const merged = ACTIONS.map((_, i) => (i < saved.length ? saved[i] : ''));
+      for (let i = saved.length; i < ACTIONS.length; i++) {
+        const preferred = DEFAULT_BINDINGS[i];
+        if (preferred && !merged.includes(preferred)) merged[i] = preferred;
+      }
+      return merged;
+    }
   } catch (_) { /* private browsing, disabled storage, corrupt JSON - ignore */ }
   return [...DEFAULT_BINDINGS];
 }
@@ -297,7 +315,13 @@ function press(id, degree) {
   if (held.has(id)) return; // already sounding from this finger/key
   ensureAudio();
   const pad = pads[degree];
-  held.set(id, { pad, voices: startChord(degree) });
+
+  // With the arpeggiator on the chord doesn't sound as a block: the arp takes
+  // the hold and plays one note per step for as long as you keep holding, so
+  // there are no block voices to hand back later.
+  if (arpOn) arpHoldOn(id, degree);
+  held.set(id, { pad, voices: arpOn ? null : startChord(degree) });
+
   pad.classList.add('on');
   loopNoteOn(id, degree); // no-op unless the looper is recording
 }
@@ -306,7 +330,8 @@ function release(id) {
   const holding = held.get(id);
   if (!holding) return;
   held.delete(id);
-  stopChord(holding.voices);
+  if (holding.voices) stopChord(holding.voices); // null while the arp had it
+  arpHoldOff(id);                                // no-op if it never did
   loopNoteOff(id);
 
   // Two fingers can sit on the same pad; only unlight it when the last one goes.
@@ -411,6 +436,7 @@ addEventListener('keydown', (e) => {
   else if (action === 'pedal') pedal();
   else if (action === 'playstop') togglePlay();
   else if (action === 'clear') clearLoop();
+  else if (action === 'arp') setArp(!arpOn);
 });
 
 addEventListener('keyup', (e) => {

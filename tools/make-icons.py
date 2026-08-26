@@ -18,7 +18,7 @@ import struct
 import zlib
 from pathlib import Path
 
-BG = (13, 14, 18)          # #0d0e12, the page background
+BG = (33, 36, 41)          # the plate: the pocket the pads sit in
 PADS = 7
 SUPERSAMPLE = 2            # render double size, box-filter down: cheap anti-aliasing
 
@@ -49,7 +49,9 @@ def render(size, inset_frac):
     for degree in range(PADS):
         x0 = inset + degree * (bar_w + gap)
         hue = round(degree * 360 / PADS)
-        bars.append((x0, x0 + bar_w, hsl_to_rgb(hue, 0.62, 0.52)))
+        # Between the pads at rest and the pads lit - an icon wants to read at
+        # 32px, so it borrows the brightness of a pressed cap.
+        bars.append((x0, x0 + bar_w, hsl_to_rgb(hue, 0.72, 0.55)))
 
     y0, y1 = inset, size - inset
     rows = []

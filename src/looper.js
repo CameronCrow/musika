@@ -197,6 +197,16 @@ function tick() {
 
 /** Hand one recorded chord to the audio hardware, stamped with its exact time. */
 function playEvent(event, at) {
+  // A recorded chord is a hold over a known span, which is exactly what the
+  // arpeggiator eats. So a loop recorded as block chords arpeggiates the moment
+  // you switch the arp on - the same reason it transposes when you change key.
+  // What was recorded is "you held chord 4", not "these three frequencies".
+  if (arpOn) {
+    arpScheduleHold(event.degree, at, at + event.dur);
+    flashPad(event.degree, at, event.dur);
+    return;
+  }
+
   const voices = startChord(event.degree, at);
   stopChord(voices, at + event.dur);
   sounding.push({ voices, endsAt: at + event.dur + RELEASE * 8 });
