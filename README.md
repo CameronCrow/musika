@@ -141,6 +141,21 @@ Up-down deliberately plays `0 1 2 1`, not `0 1 2 2 1 0`. The naive version
 sounds the top note twice in a row and the turnaround stumbles — you hear a limp
 instead of a pulse.
 
+## Octave
+
+**OCT −** and **OCT +** (keys **-** and **=**) move the whole instrument up or
+down an octave. The default sits between middle C and the F above it, which is
+a good register to *hear* harmony in and a slightly high one to play under
+anything — one octave down is usually the nicer place to live.
+
+The range is deliberately lopsided, −2 to +1. Down is genuinely useful: the same
+seven chords go from a bright organ to a bass bed. Up runs out fast, because a
+triad already spans up to 17 semitones and another octave on top is shrill
+rather than musical.
+
+Your octave is remembered along with the key, and recorded loops keep whatever
+octave they were played at — same rule as the key.
+
 ## Changing key
 
 The two dropdowns pick the root (all 12) and the mode (major or minor). The
@@ -240,6 +255,14 @@ multiplies it by the twelfth root of two.
   flipped on, Safari may play Web Audio silently with no warning whatsoever. If
   the pads light up and nothing comes out, check the switch first — the app
   isn't broken.
+- **Expect roughly 50ms between pressing and hearing.** Measured on a Windows
+  laptop: ~0.1ms of JavaScript, ~10ms of audio-graph buffer, ~40ms of operating
+  system output path, plus a 6ms attack ramp. Serving over localhost has nothing
+  to do with it — the files load once, and after that it's all local. The 40ms
+  is the browser handing samples to the sound device, and no amount of
+  JavaScript touches it; a native audio backend is the only way under it. An
+  embedded webview can be worse than a real browser window, so if it feels
+  sluggish, try it in a normal tab or as the installed app.
 - **Audio needs a real tap to start.** Browsers won't let a page make sound
   until you've touched it. Heptad creates its audio engine on your first press,
   so the very first pad you hit may sound a few milliseconds late. Every one

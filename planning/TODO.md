@@ -23,9 +23,17 @@ Milestones for Heptad. One commit per phase.
       too, because both are just a chord held over a span of time.
 - [ ] **Phase 6 — Sound shaping.** Waveform choice, filter cutoff,
       attack/release controls.
-- [ ] **Phase 7 — Modifiers.** Add a 7th, octave shift, inversions.
+- [ ] **Phase 7 — Modifiers.** Add a 7th, inversions. *(Octave shift landed
+      early, out of phase - see below.)*
 
 ## Outside the phases
+
+- [x] **Octave shift.** Pulled forward out of Phase 7 on request: the default
+      register is a little high to play under. Two bindable buttons, range -2
+      to +1, stored with the key.
+- [x] **Latency trimmed** where it was reachable: explicit `latencyHint` and a
+      6ms attack instead of 12ms. ~62ms to ~56ms. The remaining ~40ms is the
+      OS output path and is not addressable from JavaScript.
 
 - [x] **Installable.** Web app manifest, generated icons, and a service worker
       that caches the eight files the instrument needs. Installs as a desktop
