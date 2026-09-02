@@ -20,6 +20,35 @@ both hands — it's polyphonic and multi-touch.
 Status: **milestone 5 of 7**. One square-wave voice; no sound shaping or
 chord modifiers yet.
 
+## The native build
+
+There are now two Heptads. The web one is the whole instrument; the native one
+under [`native/`](native/) is the same instrument on a real audio backend,
+because the browser has a latency floor that no amount of JavaScript gets under.
+
+```bash
+cd native && cargo run --release
+```
+
+`cargo run --release` matters — a debug build gives the audio thread far less
+headroom and can crackle. `cargo test` runs 26 tests. `cargo run -- --probe`
+opens the audio device, prints what it actually got, and exits:
+
+```
+device      Headphones (Raycon Everyday Earbuds Classic Stereo)
+sample rate 44100 Hz
+buffer      256 frames (5.80 ms)
+status      audio stream running
+```
+
+That 5.80ms is the number the browser would never give up. See
+[Latency, measured](#latency-measured) below.
+
+**What it has so far:** seven pads, all 12 keys, major/minor, octave, mouse and
+keyboard, hold-to-sustain, band-limited square voice. **Not yet ported:** the
+looper, the arpeggiator, multi-touch, and the aluminium styling. The web build
+remains the complete one.
+
 ## Running it
 
 No build step, no bundler, no dependencies. Two ways:
@@ -182,6 +211,26 @@ deriving chords rather than tabulating them.
 Keys past F# drop an octave rather than climbing, so no key lands in a shrill
 register.
 
+## Latency, measured
+
+Not guessed — measured on the same machine, same earbuds.
+
+| | Web (Chrome) | Native (cpal) |
+|---|---|---|
+| JavaScript / UI thread | 0.1 ms | — |
+| Audio buffer | 10 ms | **5.8 ms** (256 frames) |
+| OS output path | 40 ms | driver-dependent, not self-inflicted |
+| Attack ramp | 6 ms | 4 ms |
+| **What the app chose** | **~56 ms** | **~10 ms** |
+
+The browser's `latencyHint: 'interactive'` is a polite suggestion; cpal's
+`BufferSize::Fixed(256)` is a number the device either accepts or refuses. That
+is the entire difference, and it is why the native build exists.
+
+Note the middle row honestly: the OS still adds its own path in both cases. The
+native figure is the part *this program* controls, not a full round-trip
+measurement.
+
 ## Tests
 
 The theory layer is pure arithmetic with no audio or DOM in it, which makes it
@@ -286,6 +335,10 @@ multiplies it by the twelfth root of two.
 ## Layout
 
 ```
+native/             the native build - Rust, cpal, egui
+  src/theory.rs       the same theory, ported 1:1, same tests
+  src/engine.rs       the audio thread; one clock, no scheduler
+  src/main.rs         window, pads, keyboard
 index.html          the whole UI: markup and CSS
 src/theory.js       music theory — pure functions, no audio, no DOM
 src/app.js          the instrument — audio engine, input, key bindings

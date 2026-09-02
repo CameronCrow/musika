@@ -28,6 +28,11 @@ Milestones for Heptad. One commit per phase.
 
 ## Outside the phases
 
+- [x] **Native build** (`native/`). Rust + cpal + egui. Milestone 1 equivalent:
+      seven pads, 12 keys, major/minor, octave, mouse and keyboard,
+      hold-to-sustain. 26 tests. Buffer latency 5.8ms against the web build's
+      ~56ms. Looper, arpeggiator and multi-touch not yet ported.
+
 - [x] **Octave shift.** Pulled forward out of Phase 7 on request: the default
       register is a little high to play under. Two bindable buttons, range -2
       to +1, stored with the key.

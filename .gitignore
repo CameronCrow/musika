@@ -29,3 +29,6 @@ graphify-out/.commits_since_update
 graphify-out/.needs_update
 graphify-out/.hook_update.log
 graphify-out/20*/
+
+# Rust build output - hundreds of MB of regenerable object files
+native/target/
