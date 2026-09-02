@@ -194,11 +194,21 @@ function stopChord(voices, when) {
 
    Pads default to the home row, so the seven chords sit under your seven
    fingers with no reaching - that matters more than it sounds like it does once
-   you're playing rather than poking. Clear starts unbound on purpose: it wipes
-   your loop, and that shouldn't be one stray keystroke away.                   */
+   you're playing rather than poking. They answer to the number row as well,
+   because the pads are labelled I..vii and sometimes the thing in your head is
+   "chord five", not "the G key". Clear starts unbound on purpose: it wipes your
+   loop, and that shouldn't be one stray keystroke away.                        */
 
 const ACTIONS = [0, 1, 2, 3, 4, 5, 6, 'pedal', 'playstop', 'clear', 'arp'];
-const DEFAULT_BINDINGS = ['a', 's', 'd', 'f', 'g', 'h', 'j', ' ', 'escape', '', 'q'];
+
+// Each action holds a LIST of keys, so one control can answer to more than one.
+// The pads ship with two: the home row, which is what you play with, and the
+// number row, which is what you reach for when you're thinking in chord numbers
+// and the roman numerals on the pads are the thing in your head.
+const DEFAULT_BINDINGS = [
+  ['a', '1'], ['s', '2'], ['d', '3'], ['f', '4'], ['g', '5'], ['h', '6'], ['j', '7'],
+  [' '], ['escape'], [], ['q'],
+];
 const BINDINGS_KEY = 'heptad.bindings';
 
 let bindings = loadBindings();
@@ -206,20 +216,41 @@ let bindings = loadBindings();
 function loadBindings() {
   try {
     const saved = JSON.parse(localStorage.getItem(BINDINGS_KEY));
-    if (Array.isArray(saved) && saved.length <= ACTIONS.length) {
-      // Saves from before a new bindable control existed are simply shorter.
-      // Keep the layout that's there and fill only the genuinely new slots from
-      // the defaults - and only when that default key isn't already spoken for,
-      // since two actions on one key means the later one silently wins.
-      const merged = ACTIONS.map((_, i) => (i < saved.length ? saved[i] : ''));
-      for (let i = saved.length; i < ACTIONS.length; i++) {
-        const preferred = DEFAULT_BINDINGS[i];
-        if (preferred && !merged.includes(preferred)) merged[i] = preferred;
+    if (!Array.isArray(saved) || saved.length > ACTIONS.length) return freshBindings();
+
+    // Two shapes have been saved over this project's life: one key per action
+    // as a bare string, and the current list-per-action. Read both, so nobody
+    // has to reset a layout they set up.
+    const wasSingleKey = !saved.every((entry) => Array.isArray(entry));
+    const merged = ACTIONS.map((_, i) => {
+      const entry = saved[i];
+      if (typeof entry === 'string') return entry ? [entry] : [];
+      return Array.isArray(entry) ? entry.filter((k) => typeof k === 'string' && k) : [];
+    });
+
+    // Top up from the defaults, taking only keys nothing else is using - two
+    // actions on one key means the later one silently wins.
+    //
+    // Which slots get topped up depends on where the save came from. An older
+    // single-key save predates pads answering to two keys, so every action is
+    // eligible and the number row arrives without anyone resetting anything. A
+    // current save is taken at its word apart from genuinely new actions, or we
+    // would resurrect keys the user had deliberately rebound away.
+    const used = new Set(merged.flat());
+    ACTIONS.forEach((_, i) => {
+      if (!wasSingleKey && i < saved.length) return;
+      for (const key of DEFAULT_BINDINGS[i]) {
+        if (!used.has(key)) { merged[i].push(key); used.add(key); }
       }
-      return merged;
-    }
+    });
+    return merged;
   } catch (_) { /* private browsing, disabled storage, corrupt JSON - ignore */ }
-  return [...DEFAULT_BINDINGS];
+  return freshBindings();
+}
+
+/** A deep copy, so editing one pad's keys can't reach into the defaults. */
+function freshBindings() {
+  return DEFAULT_BINDINGS.map((keys) => [...keys]);
 }
 
 function saveBindings() {
@@ -236,12 +267,17 @@ function normalizeKey(key) {
   return key.toLowerCase();
 }
 
-/** How a bound key is written on a pad or button. */
+/** How a single key is written on a pad or button. */
 function keyLabel(key) {
-  if (!key) return '--';
   if (key === ' ') return 'space';
   if (key === 'escape') return 'esc';
   return key;
+}
+
+/** How an action's whole set of keys is written - "a/1", "space", "--". */
+function keysLabel(keys) {
+  if (!keys || !keys.length) return '--';
+  return keys.map(keyLabel).join('/');
 }
 
 /** Reverse lookup, rebuilt whenever the bindings change: key -> action. */
@@ -249,9 +285,10 @@ let keyMap = new Map();
 function rebuildKeyMap() {
   // Anything whose key was stolen by something else has an empty binding; leave
   // those out rather than letting every unbound action answer to the same "".
-  keyMap = new Map(
-    bindings.flatMap((key, i) => (key ? [[key, ACTIONS[i]]] : []))
-  );
+  keyMap = new Map();
+  bindings.forEach((keys, i) => {
+    for (const key of keys) keyMap.set(key, ACTIONS[i]);
+  });
 }
 rebuildKeyMap();
 
@@ -308,7 +345,7 @@ function showBindings() {
     const slot = typeof action === 'number'
       ? pads[action].querySelector('.key')
       : document.querySelector(`[data-action="${action}"] .hint`);
-    slot.textContent = i === bindingIndex ? 'press a key' : keyLabel(bindings[i]);
+    slot.textContent = i === bindingIndex ? 'press a key' : keysLabel(bindings[i]);
   });
 }
 
@@ -382,11 +419,18 @@ pads.forEach((pad, degree) => {
   pad.addEventListener('pointercancel', up); // finger stolen by a system gesture
 });
 
-/** Give `key` to one action, taking it off whatever had it before. */
+/**
+ * Give `key` to one action, taking it off whatever had it before.
+ *
+ * Rebinding REPLACES that action's keys with the single one you just pressed,
+ * rather than adding to them. The pads ship with two keys each, so "add" would
+ * quietly grow the list with no way to shrink it again; "the key you press is
+ * the key for this pad" is the behaviour you can predict without being told.
+ */
 function bindKey(index, key) {
-  const previous = bindings.indexOf(key);
-  if (previous !== -1 && previous !== index) bindings[previous] = '';
-  bindings[index] = key;
+  bindings = bindings.map((keys, i) =>
+    i === index ? [key] : keys.filter((k) => k !== key)
+  );
   rebuildKeyMap();
   saveBindings();
 }
@@ -435,14 +479,16 @@ addEventListener('keydown', (e) => {
     return;
   }
 
-  const action = keyMap.get(normalizeKey(e.key));
+  const key = normalizeKey(e.key);
+  const action = keyMap.get(key);
   if (action === undefined) return;
 
   e.preventDefault(); // keys like space would otherwise scroll or re-click
   if (e.repeat) return; // holding a key repeats it; a held chord is one press
 
-  // Pads are numbers, looper controls are names.
-  if (typeof action === 'number') press('key' + action, action);
+  // Each key holds independently, exactly as each finger does - a pad answering
+  // to both 'a' and '1' must not go quiet because you let go of one of them.
+  if (typeof action === 'number') press('key:' + key, action);
   else if (action === 'pedal') pedal();
   else if (action === 'playstop') togglePlay();
   else if (action === 'clear') clearLoop();
@@ -450,8 +496,8 @@ addEventListener('keydown', (e) => {
 });
 
 addEventListener('keyup', (e) => {
-  const action = keyMap.get(normalizeKey(e.key));
-  if (typeof action === 'number') release('key' + action);
+  const key = normalizeKey(e.key);
+  if (typeof keyMap.get(key) === 'number') release('key:' + key);
 });
 
 // Stuck-note insurance: if the page loses focus mid-hold the matching release

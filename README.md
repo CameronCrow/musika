@@ -59,17 +59,32 @@ long-press the home screen icon.
 
 ## Playing it with a keyboard
 
-The seven chords sit on the home row — **A S D F G H J** — held for as long as
-the key is down, and chordable together the same way the pads are.
+Every pad answers to two keys, and both are printed on its face:
+
+```
+ I     ii    iii    IV     V     vi    vii°
+ A     S     D      F      G     H     J      <- home row, what you play with
+ 1     2     3      4      5     6     7      <- number row, matches the numerals
+```
+
+The home row is for playing — seven chords under seven fingers, no reaching.
+The number row is for when the thing in your head is "chord five" rather than
+"the G key", which is most of the time while you're still learning: a
+progression written **I–V–vi–IV** is literally `1 5 6 4`.
+
+Both rows hold for as long as the key is down and chord together the same way
+the pads do. They're independent, so a chord held with `1` keeps ringing if you
+tap and release `A`.
 
 The looper is on keys too: **space** is the pedal and **escape** plays/stops.
 Clear starts unbound on purpose — it wipes your loop with no undo, so it
-shouldn't be one stray keystroke away.
+shouldn't be one stray keystroke away. The arpeggiator is on **Q**.
 
 To change any of them, hit **rebind keys**, tap a pad or a looper button, and
-press the key you want. Taking a key from something else leaves that thing
-unbound rather than double-booking the key. Escape finishes. Every binding is
-printed on the thing it triggers, and your layout is remembered in the browser.
+press the key you want. That *replaces* whatever that control answered to, so a
+rebound pad has exactly the one key you chose — and taking a key from something
+else leaves that thing unbound rather than double-booking it. Escape finishes.
+Your layout is remembered in the browser.
 
 ## The looper
 
