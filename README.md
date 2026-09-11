@@ -44,10 +44,40 @@ status      audio stream running
 That 5.80ms is the number the browser would never give up. See
 [Latency, measured](#latency-measured) below.
 
+### Putting it on the taskbar
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\install-native.ps1
+```
+
+Builds it, copies the exe and icon to `%LOCALAPPDATA%\Heptad`, and puts a
+shortcut in the Start Menu. That stable path matters: `native/target/` is
+gitignored and `cargo clean` wipes it, so a pin aimed there breaks the first
+time you clean. Re-run the script after changing the native code and the pinned
+copy updates in place.
+
+Windows 10 deliberately removed programmatic taskbar pinning, so the last step
+is manual and always will be: **Start → type "Heptad" → right-click → Pin to
+taskbar.**
+
+### The voice
+
+Four patches: **raw**, **warm** (the default), **chime**, **lo-fi**. `raw` is
+what the instrument sounded like before it had a voice worth the name - one
+square wave, a fixed filter, nothing moving - and it is kept so the difference is
+audible rather than asserted.
+
+```bash
+cargo run --release -- --render demo.wav
+```
+
+writes all four playing I–V–vi–IV back to back, so you can judge them by ear
+without launching anything. See [The sound](#the-sound) below.
+
 **What it has so far:** seven pads, all 12 keys, major/minor, octave, mouse and
-keyboard, hold-to-sustain, band-limited square voice. **Not yet ported:** the
-looper, the arpeggiator, multi-touch, and the aluminium styling. The web build
-remains the complete one.
+keyboard, hold-to-sustain, four patches. **Not yet ported:** the looper, the
+arpeggiator, multi-touch, and the aluminium styling. The web build remains the
+complete one — and still has the old square-wave voice.
 
 ## Running it
 
@@ -211,6 +241,22 @@ deriving chords rather than tabulating them.
 Keys past F# drop an octave rather than climbing, so no key lands in a shrill
 register.
 
+## The sound
+
+A single square wave through a fixed lowpass is a *beeper*. Five things separate
+that from a synthesiser, and the native build now has all five:
+
+| | why it matters |
+|---|---|
+| **Two detuned oscillators** | Two saws a few cents apart drift in and out of phase over about a second. That slow beating *is* what "thick" and "warm" are. One oscillator is perfectly static and reads as synthetic instantly. Biggest single win. |
+| **A real ADSR** | Not just fade in and fade out. The decay — a dip from the initial peak down to the sustain level — is what makes a note sound *struck* rather than switched on. |
+| **A resonant filter that moves** | A fixed lowpass only makes things duller. One that snaps open on the attack and closes over the next few hundred ms is the sound everyone recognises as "a synth". Resonance is a gain bump at the cutoff — a one-pole filter cannot produce it at all. |
+| **Stereo** | The three notes of a chord are panned across the field instead of stacked in the middle, using equal-power panning so nothing dips in loudness crossing the centre. |
+| **Reverb** | A dry chord happens inside your head; the same chord with a tail happens *somewhere*. Four comb filters make the tail, two allpasses smear it into a wash, and damping rolls the treble off each pass the way a real room absorbs it. |
+
+The comb delay lengths deliberately share no common factors. If they did, the
+echoes would line up and you would hear a pitch instead of a room.
+
 ## Latency, measured
 
 Not guessed — measured on the same machine, same earbuds.
@@ -337,8 +383,11 @@ multiplies it by the twelfth root of two.
 ```
 native/             the native build - Rust, cpal, egui
   src/theory.rs       the same theory, ported 1:1, same tests
-  src/engine.rs       the audio thread; one clock, no scheduler
+  src/voice.rs        one note: oscillators, envelopes, filter, panning
+  src/reverb.rs       the room, built out of combs and allpasses
+  src/engine.rs       the audio thread and the mix; one clock, no scheduler
   src/main.rs         window, pads, keyboard
+tools/install-native.ps1  build + install + shortcut, for pinning
 index.html          the whole UI: markup and CSS
 src/theory.js       music theory — pure functions, no audio, no DOM
 src/app.js          the instrument — audio engine, input, key bindings

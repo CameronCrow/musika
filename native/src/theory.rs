@@ -166,6 +166,9 @@ pub enum ArpPattern {
     UpDown,
 }
 
+// Ported ahead of its UI along with ArpPattern above; the arpeggiator is
+// the next thing to land on the native side.
+#[allow(dead_code)]
 pub fn arp_sequence(pattern: ArpPattern, length: usize) -> Vec<usize> {
     let up: Vec<usize> = (0..length).collect();
     match pattern {

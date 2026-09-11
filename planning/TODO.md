@@ -28,6 +28,10 @@ Milestones for Heptad. One commit per phase.
 
 ## Outside the phases
 
+- [x] **Native voice.** Detuned dual oscillators, ADSR, resonant filter with its
+      own envelope, equal-power stereo spread, and a Schroeder reverb. Four
+      patches; `--render` writes a WAV of all of them for judging by ear.
+      Installable and pinnable via `tools/install-native.ps1`.
 - [x] **Native build** (`native/`). Rust + cpal + egui. Milestone 1 equivalent:
       seven pads, 12 keys, major/minor, octave, mouse and keyboard,
       hold-to-sustain. 26 tests. Buffer latency 5.8ms against the web build's

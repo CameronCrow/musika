@@ -90,7 +90,9 @@ def downsample(rows, factor):
     return out
 
 
-def write_png(path, rows):
+def png_bytes(rows):
+    """Encode pixels as PNG and hand back the bytes, so the .ico writer below
+    can pack the same images without going through a file."""
     size = len(rows)
     raw = b"".join(b"\x00" + bytes(v for px in row for v in px) for row in rows)
 
@@ -99,12 +101,47 @@ def write_png(path, rows):
         return (struct.pack(">I", len(data)) + body
                 + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
 
-    path.write_bytes(
+    return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
         + chunk(b"IDAT", zlib.compress(raw, 9))
         + chunk(b"IEND", b"")
     )
+
+
+def write_ico(path, sizes):
+    """The Windows icon, used by the taskbar and the Start Menu shortcut.
+
+    An .ico is a tiny directory followed by the images themselves. Since Vista
+    those images may be PNGs rather than raw bitmaps with a separate AND mask,
+    so this needs nothing the PNG encoder above doesn't already do.
+
+    Every size is baked into the one file because Windows picks per context:
+    16px in a title bar, 32 in the taskbar, 256 in large-icon views.
+    """
+    images = [png_bytes(downsample(render(s * SUPERSAMPLE, 0.10), SUPERSAMPLE))
+              for s in sizes]
+
+    header = struct.pack("<HHH", 0, 1, len(images))  # reserved, type 1 = icon
+    offset = len(header) + 16 * len(images)
+    entries, blob = b"", b""
+    for size, data in zip(sizes, images):
+        # A 0 in the width/height byte means 256 - the format is that old.
+        byte = size if size < 256 else 0
+        entries += struct.pack("<BBBBHHII",
+                               byte, byte, 0, 0, 1, 32, len(data), offset)
+        blob += data
+        offset += len(data)
+
+    path.write_bytes(header + entries + blob)
+    print(f"{path.name}  {sizes}  {len(path.read_bytes())} bytes")
+
+
+def write_png(path, rows):
+    # `size` comes from the pixels, not from the caller's loop variable - it
+    # read the module-level one by accident after png_bytes was split out.
+    size = len(rows)
+    path.write_bytes(png_bytes(rows))
     print(f"{path.relative_to(path.parent.parent)}  {size}x{size}  {len(path.read_bytes())} bytes")
 
 
@@ -121,3 +158,6 @@ TARGETS = [
 OUT.mkdir(exist_ok=True)
 for name, size, inset in TARGETS:
     write_png(OUT / name, downsample(render(size * SUPERSAMPLE, inset), SUPERSAMPLE))
+
+# The native build's Windows icon, for the taskbar and the Start Menu shortcut.
+write_ico(OUT / "heptad.ico", [16, 32, 48, 64, 128, 256])

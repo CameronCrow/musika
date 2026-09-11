@@ -4,20 +4,25 @@
 //! audio backend. Seven pads, each a whole chord, all seven belonging to one
 //! key, so there is no wrong note to hit.
 //!
-//! Three files:
+//! Five files:
 //!   theory.rs  the music - pure integer arithmetic, ported 1:1 from the JS
-//!   engine.rs  the sound - cpal, and the one clock that is the audio itself
+//!   voice.rs   what one note sounds like - oscillators, envelopes, filter
+//!   reverb.rs  the room it is played in
+//!   engine.rs  the audio thread and the mix
 //!   main.rs    the instrument - egui window, pads, keyboard
 //!
 //! Run it with `cargo run --release`. Debug builds work but the audio thread
 //! has far less headroom, so use release if you hear crackling.
 
 mod engine;
+mod reverb;
 mod theory;
+mod voice;
 
 use eframe::egui;
 use engine::{Engine, Msg};
 use theory::Mode;
+use voice::PATCHES;
 
 /// Default keys, matching the web build: home row to play with, number row
 /// because the pads are labelled I..vii and sometimes the thing in your head is
@@ -70,6 +75,7 @@ struct Heptad {
     key_pitch: i32, // 0-11, 0 = C
     mode: Mode,
     octave: i32,
+    patch_index: usize,
     chords: [[i32; 3]; 7],
 
     /// Which (source, degree) pairs are sounding right now.
@@ -78,7 +84,11 @@ struct Heptad {
 
 impl Heptad {
     fn new() -> Self {
-        let (engine, error) = match Engine::start() {
+        // Patch 1 is "warm" - detuned saws with a moving filter and a room
+        // around them. Patch 0 is the bare square the engine started life with,
+        // kept so the difference is audible rather than asserted.
+        let patch_index = 1;
+        let (engine, error) = match Engine::start(PATCHES[patch_index]) {
             Ok(e) => (Some(e), None),
             Err(e) => (None, Some(e)),
         };
@@ -88,6 +98,7 @@ impl Heptad {
             key_pitch: 0,
             mode: Mode::Major,
             octave: -1, // an octave below the web default, which plays nicer
+            patch_index,
             chords: [[0; 3]; 7],
             held: Vec::new(),
         };
@@ -273,6 +284,25 @@ impl Heptad {
 
             ui.separator();
 
+            let mut patch = self.patch_index;
+            egui::ComboBox::from_id_salt("patch")
+                .selected_text(PATCHES[patch].name)
+                .width(84.0)
+                .show_ui(ui, |ui| {
+                    for (i, p) in PATCHES.iter().enumerate() {
+                        ui.selectable_value(&mut patch, i, p.name);
+                    }
+                });
+            if patch != self.patch_index {
+                self.patch_index = patch;
+                self.release_all();
+                if let Some(e) = &self.engine {
+                    e.send(Msg::SetPatch(patch));
+                }
+            }
+
+            ui.separator();
+
             let mut pitch = self.key_pitch;
             egui::ComboBox::from_id_salt("key")
                 .selected_text(theory::NOTE_NAMES[pitch as usize])
@@ -392,8 +422,116 @@ impl Heptad {
     }
 }
 
+/// The window and taskbar icon, drawn rather than loaded.
+///
+/// It is a picture of the instrument: seven bars in the seven pad hues, on the
+/// plate colour. Generating it here costs one loop and buys two things - no
+/// image-decoder dependency, and no asset file that could quietly drift out of
+/// step with the pads, since it runs the same hue formula they do.
+fn app_icon() -> egui::IconData {
+    const N: i32 = 64;
+    let inset = N as f32 * 0.10;
+    let span = N as f32 - 2.0 * inset;
+    let gap = span / 7.0 * 0.16;
+    let bar_w = (span - gap * 6.0) / 7.0;
+
+    // Precompute the seven bar colours rather than converting per pixel.
+    let bars: Vec<(f32, (u8, u8, u8))> = (0..7)
+        .map(|d| {
+            let x0 = inset + d as f32 * (bar_w + gap);
+            (x0, hsl_to_rgb(d as f32 * 360.0 / 7.0, 0.62, 0.52))
+        })
+        .collect();
+
+    let mut rgba = Vec::with_capacity((N * N * 4) as usize);
+    for y in 0..N {
+        for x in 0..N {
+            let (fx, fy) = (x as f32, y as f32);
+            let mut px = (26u8, 29u8, 34u8); // the plate the pads sit in
+            if fy >= inset && fy < N as f32 - inset {
+                for &(x0, colour) in &bars {
+                    if fx >= x0 && fx < x0 + bar_w {
+                        px = colour;
+                    }
+                }
+            }
+            rgba.extend_from_slice(&[px.0, px.1, px.2, 255]);
+        }
+    }
+
+    egui::IconData {
+        rgba,
+        width: N as u32,
+        height: N as u32,
+    }
+}
+
 fn pad_key_label(degree: usize) -> &'static str {
     ["A", "S", "D", "F", "G", "H", "J"][degree]
+}
+
+/// Minimal 16-bit stereo WAV. No dependency: a WAV is a 44-byte header and
+/// then the samples, and everything here is `to_le_bytes`.
+fn write_wav(path: &str, samples: &[f32], sample_rate: u32) -> Result<(), String> {
+    let data_bytes = samples.len() as u32 * 2;
+    let mut out: Vec<u8> = Vec::with_capacity(44 + data_bytes as usize);
+
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    out.extend_from_slice(&1u16.to_le_bytes()); // 1 = uncompressed PCM
+    out.extend_from_slice(&2u16.to_le_bytes()); // stereo
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&(sample_rate * 4).to_le_bytes()); // bytes per second
+    out.extend_from_slice(&4u16.to_le_bytes()); // bytes per frame
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_bytes.to_le_bytes());
+    for &s in samples {
+        out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+    }
+
+    std::fs::write(path, out).map_err(|e| format!("could not write {path}: {e}"))
+}
+
+/// Play I-V-vi-IV through every patch in turn and write it to a WAV.
+///
+/// A synth patch is judged by ear, not by assertion, and this is how you hear
+/// all four back to back without launching anything - including "raw", which is
+/// what the instrument sounded like before it had a voice worth the name.
+fn render_demo(path: &str) -> Result<(), String> {
+    const SR: f32 = 48_000.0;
+    const HOLD: f32 = 1.15;
+
+    // C major down an octave, the register the app actually starts in.
+    let chords = theory::chords_in_key(48, &theory::MAJOR_SCALE);
+    // The progression in the README: I, V, vi, IV.
+    let progression = [0usize, 4, 5, 3];
+    let tail = 2.2; // room for the release and the reverb behind it
+    let per_patch = progression.len() as f32 * HOLD + tail;
+
+    let mut all: Vec<f32> = Vec::new();
+    for patch in PATCHES.iter() {
+        let mut events = Vec::new();
+        for (i, &degree) in progression.iter().enumerate() {
+            let t = i as f32 * HOLD;
+            events.push((t, Msg::NoteOn { id: i as u64, notes: chords[degree].to_vec() }));
+            // Let go just before the next chord, so they overlap slightly the
+            // way a person playing would.
+            events.push((t + HOLD * 0.94, Msg::NoteOff { id: i as u64 }));
+        }
+        println!("rendering '{}'...", patch.name);
+        all.extend_from_slice(&engine::render(*patch, SR, per_patch, events));
+    }
+
+    write_wav(path, &all, SR as u32)?;
+    let secs = all.len() as f32 / 2.0 / SR;
+    println!("wrote {path}  ({secs:.1}s, order: raw, warm, chime, lo-fi)");
+    Ok(())
 }
 
 fn main() -> eframe::Result<()> {
@@ -401,7 +539,7 @@ fn main() -> eframe::Result<()> {
     // and exits. "The window appeared" is not the same as "the sound card said
     // yes", and this is the difference.
     if std::env::args().any(|a| a == "--probe") {
-        match Engine::start() {
+        match Engine::start(PATCHES[1]) {
             Ok(e) => {
                 println!("device      {}", e.device_name);
                 println!("sample rate {} Hz", e.sample_rate);
@@ -419,10 +557,22 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // `heptad --render out.wav` writes a demo of every patch and exits.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--render") {
+        let path = args.get(i + 1).cloned().unwrap_or_else(|| "heptad-demo.wav".into());
+        if let Err(e) = render_demo(&path) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([980.0, 520.0])
             .with_min_inner_size([620.0, 360.0])
+            .with_icon(std::sync::Arc::new(app_icon()))
             .with_title("Heptad"),
         ..Default::default()
     };
