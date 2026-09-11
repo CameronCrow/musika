@@ -5,7 +5,12 @@ up: "[[musika]]"
 ---
 # TODO
 
-Milestones for Heptad. One commit per phase.
+Musika is the native Rust app under `native/`. The phases below were the web
+build, which is **retired** — kept deployed and readable, no longer developed.
+Phases 6 and 7 were never done there and never will be; what they describe now
+belongs to the native roadmap at the bottom.
+
+## The web build (retired)
 
 - [x] **Phase 1 — Playable core.** Seven pads, C major, hold-to-sustain,
       polyphonic multi-touch, one square-wave voice. Theory module + unit tests.
@@ -21,21 +26,34 @@ Milestones for Heptad. One commit per phase.
       patterns, bindable to a key. Its own step clock, not the looper's - the
       looper's position wraps, the arp grid free-runs. Looped chords arpeggiate
       too, because both are just a chord held over a span of time.
-- [ ] **Phase 6 — Sound shaping.** Waveform choice, filter cutoff,
-      attack/release controls.
-- [ ] **Phase 7 — Modifiers.** Add a 7th, inversions. *(Octave shift landed
-      early, out of phase - see below.)*
+- [~] **Phase 6 — Sound shaping.** Never done on the web. Superseded by the
+      native voice, which went much further than this phase described.
+- [~] **Phase 7 — Modifiers.** Never done on the web. Octave shift landed early
+      and out of phase; 7ths and inversions move to the native roadmap.
 
-## Outside the phases
+## Native (`native/`) — the actual product
 
 - [x] **Native voice.** Detuned dual oscillators, ADSR, resonant filter with its
       own envelope, equal-power stereo spread, and a Schroeder reverb. Four
       patches; `--render` writes a WAV of all of them for judging by ear.
       Installable and pinnable via `tools/install-native.ps1`.
-- [x] **Native build** (`native/`). Rust + cpal + egui. Milestone 1 equivalent:
-      seven pads, 12 keys, major/minor, octave, mouse and keyboard,
-      hold-to-sustain. 26 tests. Buffer latency 5.8ms against the web build's
-      ~56ms. Looper, arpeggiator and multi-touch not yet ported.
+- [x] **Native build** (`native/`). Rust + cpal + egui. Seven pads, 12 keys,
+      major/minor, octave, mouse and keyboard, hold-to-sustain. Buffer latency
+      5.8ms against the web build's ~56ms.
+- [x] **Named Musika**, embedded icon, GUI subsystem so launching no longer
+      flashes a console. 43 tests.
+
+### Next, in rough order
+
+- [ ] **Looper.** Port from the web build. It gets *simpler* on a sample clock:
+      the look-ahead scheduler stops being necessary at all.
+- [ ] **Arpeggiator.** `arp_sequence` is already ported and tested; it needs a
+      clock and a UI.
+- [ ] **Editable patches** rather than four fixed ones - the `Patch` struct is
+      already the whole sound, so this is sliders, not architecture.
+- [ ] **7ths and inversions.**
+- [ ] **MIDI in** (`midir`) - the thing a native build can do that no browser
+      can do portably.
 
 - [x] **Octave shift.** Pulled forward out of Phase 7 on request: the default
       register is a little high to play under. Two bindable buttons, range -2

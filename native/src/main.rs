@@ -1,8 +1,14 @@
-//! Heptad (native) - a seven-chord organ.
+//! Musika - a seven-chord organ.
 //!
-//! Same instrument as the web version in `../index.html`, rebuilt on a real
-//! audio backend. Seven pads, each a whole chord, all seven belonging to one
-//! key, so there is no wrong note to hit.
+//! Seven pads, each playing a whole chord, all seven belonging to one key, so
+//! there is no wrong note to hit. This is the instrument; the web build it grew
+//! out of is retired.
+//!
+//! Built as a Windows GUI program rather than a console one, which is what stops
+//! a terminal flashing up behind the window. The cost is that a GUI process has
+//! no stdout to print to, so `--probe` and the progress lines from `--render`
+//! only appear from a debug build (`cargo run -- --probe`). `--render` still
+//! writes its WAV either way.
 //!
 //! Five files:
 //!   theory.rs  the music - pure integer arithmetic, ported 1:1 from the JS
@@ -13,6 +19,10 @@
 //!
 //! Run it with `cargo run --release`. Debug builds work but the audio thread
 //! has far less headroom, so use release if you hear crackling.
+
+// Debug builds keep a console so the developer flags can print; release builds
+// are pure GUI, so launching never spawns a terminal.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod engine;
 mod reverb;
@@ -68,7 +78,7 @@ impl Source {
     }
 }
 
-struct Heptad {
+struct Musika {
     engine: Option<Engine>,
     error: Option<String>,
 
@@ -82,7 +92,7 @@ struct Heptad {
     held: Vec<(Source, usize)>,
 }
 
-impl Heptad {
+impl Musika {
     fn new() -> Self {
         // Patch 1 is "warm" - detuned saws with a moving filter and a room
         // around them. Patch 0 is the bare square the engine started life with,
@@ -92,7 +102,7 @@ impl Heptad {
             Ok(e) => (Some(e), None),
             Err(e) => (None, Some(e)),
         };
-        let mut app = Heptad {
+        let mut app = Musika {
             engine,
             error,
             key_pitch: 0,
@@ -184,7 +194,7 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     )
 }
 
-impl eframe::App for Heptad {
+impl eframe::App for Musika {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_keys(&ctx);
@@ -216,7 +226,7 @@ impl eframe::App for Heptad {
     }
 }
 
-impl Heptad {
+impl Musika {
     fn legend(&self) -> String {
         let key = format!(
             "{} {}",
@@ -232,7 +242,7 @@ impl Heptad {
             Some(ms) => format!("  ·  buffer {ms:.1}ms"),
             None => String::new(),
         };
-        format!("HEPTAD  —  key of {key}{oct}{latency}")
+        format!("MUSIKA  —  key of {key}{oct}{latency}")
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
@@ -535,7 +545,7 @@ fn render_demo(path: &str) -> Result<(), String> {
 }
 
 fn main() -> eframe::Result<()> {
-    // `heptad --probe` opens the audio device, reports what it actually got,
+    // `musika --probe` opens the audio device, reports what it actually got,
     // and exits. "The window appeared" is not the same as "the sound card said
     // yes", and this is the difference.
     if std::env::args().any(|a| a == "--probe") {
@@ -557,10 +567,10 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    // `heptad --render out.wav` writes a demo of every patch and exits.
+    // `musika --render out.wav` writes a demo of every patch and exits.
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--render") {
-        let path = args.get(i + 1).cloned().unwrap_or_else(|| "heptad-demo.wav".into());
+        let path = args.get(i + 1).cloned().unwrap_or_else(|| "musika-demo.wav".into());
         if let Err(e) = render_demo(&path) {
             eprintln!("{e}");
             std::process::exit(1);
@@ -573,15 +583,15 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([980.0, 520.0])
             .with_min_inner_size([620.0, 360.0])
             .with_icon(std::sync::Arc::new(app_icon()))
-            .with_title("Heptad"),
+            .with_title("Musika"),
         ..Default::default()
     };
     eframe::run_native(
-        "Heptad",
+        "Musika",
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::dark());
-            Ok(Box::new(Heptad::new()))
+            Ok(Box::new(Musika::new()))
         }),
     )
 }

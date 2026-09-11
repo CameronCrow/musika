@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Generate Heptad's app icons.
+Generate Musika's app icons.
 
-The icon is just the instrument: seven bars in the seven pad hues, on the same
-background colour as the page. Those hues are computed the same way app.js
-computes them - degree * 360 / 7 - so if the palette ever changes, rerun this
-rather than hand-editing a PNG.
+The icon is the instrument: bars in the pad hues, on the colour of the plate
+they sit in. Those hues come from the same formula the pads use - degree * 360
+/ 7 - so if the palette ever changes, rerun this rather than hand-editing a PNG.
+
+Small sizes draw fewer, fatter bars; see bars_for(). musika.ico is embedded into
+the executable by native/build.rs.
 
     python tools/make-icons.py
 
@@ -36,19 +38,37 @@ def hsl_to_rgb(h, s, l):
     return tuple(int(round((v + m) * 255)) for v in (r, g, b))
 
 
-def render(size, inset_frac):
+def bars_for(size):
+    """How many bars to draw at a given icon size.
+
+    Seven bars inside a 16px tile leaves each one about a pixel and a half wide,
+    with a gap narrower than that - it greys into mush and reads as nothing.
+    Small sizes therefore draw a simplified mark with fewer, fatter bars, which
+    is ordinary icon practice: the shape survives, the detail goes. The hues
+    still span the whole wheel, so a three-bar 16px icon is recognisably the
+    same object as the seven-bar 256px one.
+    """
+    if size <= 32:
+        return 3
+    if size <= 64:
+        return 5
+    return PADS
+
+
+def render(size, inset_frac, bars_n=None):
     """Draw the icon at `size`, with `inset_frac` of empty margin all round."""
+    bars_n = bars_n or PADS
     inset = size * inset_frac
     span = size - 2 * inset
-    gap = span / PADS * 0.16
-    bar_w = (span - gap * (PADS - 1)) / PADS
+    gap = span / bars_n * 0.16
+    bar_w = (span - gap * (bars_n - 1)) / bars_n
     radius = bar_w * 0.28
 
     # Precompute each bar's horizontal extent and colour.
     bars = []
-    for degree in range(PADS):
+    for degree in range(bars_n):
         x0 = inset + degree * (bar_w + gap)
-        hue = round(degree * 360 / PADS)
+        hue = round(degree * 360 / bars_n)
         # Between the pads at rest and the pads lit - an icon wants to read at
         # 32px, so it borrows the brightness of a pressed cap.
         bars.append((x0, x0 + bar_w, hsl_to_rgb(hue, 0.72, 0.55)))
@@ -119,8 +139,10 @@ def write_ico(path, sizes):
     Every size is baked into the one file because Windows picks per context:
     16px in a title bar, 32 in the taskbar, 256 in large-icon views.
     """
-    images = [png_bytes(downsample(render(s * SUPERSAMPLE, 0.10), SUPERSAMPLE))
-              for s in sizes]
+    images = [
+        png_bytes(downsample(render(s * SUPERSAMPLE, 0.10, bars_for(s)), SUPERSAMPLE))
+        for s in sizes
+    ]
 
     header = struct.pack("<HHH", 0, 1, len(images))  # reserved, type 1 = icon
     offset = len(header) + 16 * len(images)
@@ -159,5 +181,6 @@ OUT.mkdir(exist_ok=True)
 for name, size, inset in TARGETS:
     write_png(OUT / name, downsample(render(size * SUPERSAMPLE, inset), SUPERSAMPLE))
 
-# The native build's Windows icon, for the taskbar and the Start Menu shortcut.
-write_ico(OUT / "heptad.ico", [16, 32, 48, 64, 128, 256])
+# The native build's Windows icon. Embedded into musika.exe by build.rs, and
+# used by the Start Menu shortcut and the taskbar.
+write_ico(OUT / "musika.ico", [16, 32, 48, 64, 128, 256])

@@ -3,9 +3,9 @@ type: reference
 tags: [repo/musika]
 up: "[[musika]]"
 ---
-# Planning — Heptad
+# Planning — Musika
 
-**Heptad** is a seven-button chord organ for the browser. Each pad plays a whole
+**Musika** is a seven-button chord organ - a native Rust app for Windows. Each pad plays a whole
 triad; all seven triads are drawn from one key, so no sequence of presses can
 sound wrong. Hold to sustain, polyphonic, multi-touch, synth voice.
 
@@ -23,18 +23,19 @@ Two hard rules the project is built around:
 
 ## Current State
 
-**Phase 4 complete.** Seven pads in any of the 12 keys, major or minor,
-hold-to-sustain, polyphonic and multi-touch via Pointer Events, one square-wave
-voice per note through a lowpass and a limiter. Playable from the keyboard, with
-every pad and every looper control rebindable and remembered. A loop pedal that
-records, loops and overdubs on a look-ahead scheduler; recorded chords keep the
-pitches they were played with, so a loop holds its ground when you change key to
-play over it. Theory module covered
-by 15 passing tests (`node --test`). Live at
-<https://cameroncrow.github.io/musika/> via GitHub Pages, served from the
-repository root on `main`.
+**Musika is the native Rust app under `native/`.** Seven pads, all 12 keys,
+major and minor, octave shift, mouse and keyboard, hold-to-sustain, and a real
+synth voice: detuned dual oscillators, ADSR, a resonant filter with its own
+envelope, equal-power stereo panning and a Schroeder reverb. Four patches,
+including `raw` - the original square wave - kept for comparison. 43 tests.
+5.8ms buffer latency. Installs to `%LOCALAPPDATA%\Musika` and pins to the
+taskbar via `tools/install-native.ps1`.
 
-Next: Phase 5, the arpeggiator - which reuses the looper's scheduler.
+**The web build is retired.** Still deployed at
+<https://cameroncrow.github.io/musika/> and still the only place the looper and
+arpeggiator exist, but no longer developed. Both are on the native roadmap.
+
+Next: port the looper, then the arpeggiator.
 
 ## Phases
 

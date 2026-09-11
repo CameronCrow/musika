@@ -256,7 +256,7 @@ impl Engine {
 /// `events` are (seconds, message) pairs. Returns interleaved stereo f32.
 ///
 /// This exists so the sound can be *listened to* rather than asserted about -
-/// `heptad --render` writes a WAV of the same engine the speakers get, which is
+/// `musika --render` writes a WAV of the same engine the speakers get, which is
 /// a far better way to judge a synth patch than any test could be.
 pub fn render(
     patch: Patch,
