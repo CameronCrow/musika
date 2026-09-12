@@ -74,6 +74,32 @@ $sc.Description = 'Musika - a seven-chord organ'
 $sc.Save()
 Write-Host "shortcut  $lnk"
 
+# Repair a taskbar pin left pointing at the old name.
+#
+# Renaming the app deleted %LOCALAPPDATA%\Heptad, which leaves any existing
+# taskbar pin aimed at a binary that no longer exists - a dead icon. The pin is
+# a .lnk in the User Pinned folder, and which .lnk owns which taskbar slot is
+# recorded in an undocumented binary blob under HKCU\...\Taskband that also
+# holds every other pin you have. Renaming or removing the file would mean
+# rewriting that blob, and getting it wrong takes out the entire taskbar. So the
+# existing shortcut is repointed in place instead: same filename, new target and
+# icon. Only a pin that actually points at the old, now-missing path is touched.
+$pinDir = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
+$stalePin = Join-Path $pinDir 'Heptad.lnk'
+$repaired = $false
+if (Test-Path $stalePin) {
+    $pin = $shell.CreateShortcut($stalePin)
+    if ($pin.TargetPath -like '*Heptad*' -and -not (Test-Path $pin.TargetPath)) {
+        $pin.TargetPath = Join-Path $dest 'musika.exe'
+        $pin.WorkingDirectory = $dest
+        $pin.IconLocation = Join-Path $dest 'musika.ico'
+        $pin.Description = 'Musika - a seven-chord organ'
+        $pin.Save()
+        Write-Host "repaired the taskbar pin (it pointed at the deleted Heptad build)"
+        $repaired = $true
+    }
+}
+
 # Windows 10 deliberately removed the "Pin to taskbar" verb from the shell
 # automation API - Microsoft treats the taskbar as the user's, not an
 # installer's. Try it anyway, since it still exists on some builds and in some
@@ -82,14 +108,27 @@ $pinned = $false
 try {
     $shellApp = New-Object -ComObject Shell.Application
     $item = $shellApp.Namespace($programs).ParseName('Musika.lnk')
-    $verb = $item.Verbs() | Where-Object { ($_.Name -replace '&', '') -match 'taskbar' }
+
+    # Match the PIN verb only. A loose match on "taskbar" also catches
+    # "Unpin from taskbar", and when the app is already pinned that is the only
+    # taskbar verb Windows offers - so a loose match does not fail to pin, it
+    # silently UNPINS. This script did exactly that once. Anchoring on "Pin to"
+    # cannot match "Unpin from"; the -notlike is belt and braces.
+    $verb = $item.Verbs() | Where-Object {
+        $n = $_.Name -replace '&', ''
+        $n -like 'Pin to taskbar*' -and $n -notlike 'Unpin*'
+    }
     if ($verb) { $verb.DoIt(); $pinned = $true }
 } catch {
     $pinned = $false
 }
 
 Write-Host ""
-if ($pinned) {
+if ($repaired) {
+    Write-Host "Your existing taskbar pin now launches Musika. It may keep showing"
+    Write-Host "the old icon until Explorer refreshes its cache - unpin and re-pin"
+    Write-Host "from Start if that bothers you."
+} elseif ($pinned) {
     Write-Host "pinned to the taskbar."
 } else {
     Write-Host "Windows 10 does not allow pinning programmatically, so the last"

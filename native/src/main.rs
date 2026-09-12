@@ -521,7 +521,7 @@ fn render_demo(path: &str) -> Result<(), String> {
     let chords = theory::chords_in_key(48, &theory::MAJOR_SCALE);
     // The progression in the README: I, V, vi, IV.
     let progression = [0usize, 4, 5, 3];
-    let tail = 2.2; // room for the release and the reverb behind it
+    let tail = 1.6; // room for the release and the reverb behind it
     let per_patch = progression.len() as f32 * HOLD + tail;
 
     let mut all: Vec<f32> = Vec::new();
@@ -540,7 +540,9 @@ fn render_demo(path: &str) -> Result<(), String> {
 
     write_wav(path, &all, SR as u32)?;
     let secs = all.len() as f32 / 2.0 / SR;
-    println!("wrote {path}  ({secs:.1}s, order: raw, warm, chime, lo-fi)");
+    let order: Vec<&str> = PATCHES.iter().map(|p| p.name).collect();
+    println!("wrote {path}  ({secs:.1}s, {:.1}s each)", per_patch);
+    println!("order: {}", order.join(", "));
     Ok(())
 }
 

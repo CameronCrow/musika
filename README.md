@@ -50,7 +50,7 @@ crackle under full polyphony.
 | **Mouse** | Click and drag across the pads. |
 | **Octave** | `-` and `=`, or the buttons. Range −3 to +1; it starts one octave below middle C. |
 | **Key / mode** | All 12 roots, major or minor. |
-| **Patch** | `raw`, `warm`, `chime`, `lo-fi`. |
+| **Patch** | Eleven sounds — see [The patches](#the-patches). |
 
 The roman numerals on the pads are the notation musicians actually use, so
 "I–V–vi–IV" means press pads 1, 5, 6, 4 — a progression that carries a great many
@@ -58,8 +58,8 @@ pop songs. Play each for a slow count of four.
 
 ## The sound
 
-A single square wave through a fixed lowpass is a *beeper*. Five things separate
-that from a synthesiser, and all five are here:
+A single square wave through a fixed lowpass is a *beeper*. These are the things
+that separate that from a synthesiser:
 
 | | why it matters |
 |---|---|
@@ -68,12 +68,32 @@ that from a synthesiser, and all five are here:
 | **A resonant filter that moves** | A fixed lowpass only makes things duller. One that snaps open on the attack and closes over the next few hundred ms is the sound everyone recognises as "a synth". Resonance is a gain bump at the cutoff — a one-pole filter cannot produce it at all. |
 | **Stereo** | The three notes of a chord are panned across the field instead of stacked in the middle, using equal-power panning so nothing dips in loudness crossing the centre. |
 | **Reverb** | A dry chord happens inside your head; the same chord with a tail happens *somewhere*. Four comb filters make the tail, two allpasses smear it into a wash, and damping rolls the treble off each pass the way a real room absorbs it. |
+| **Three filter modes** | The state variable filter computes lowpass, bandpass and highpass simultaneously as a side effect of how it works, so offering all three costs one `match`. Bandpass is hollow and vocal; highpass throws away the fundamental and leaves only air. |
+| **A sub-oscillator** | A square an octave below the note. This is where weight comes from — a filtered saw has no bottom of its own, and no amount of lowering the cutoff will give it any. |
+| **Vibrato** | A slow pitch wobble. A few cents at 4–6Hz reads as expression; a lot of it reads as seasickness. |
 
 The comb delay lengths deliberately share no common factors. If they did, the
 echoes would line up and you would hear a pitch instead of a room.
 
-`raw` is the voice the instrument had before any of this — one square wave,
-nothing moving — kept so the difference is audible rather than asserted.
+### The patches
+
+| | |
+|---|---|
+| `raw` | The voice before any of the above — one square wave, nothing moving. Kept so the difference is audible rather than asserted. |
+| `warm` | The default. Detuned saws, a breathing filter, a room. |
+| `organ` | Bright and completely static, with a sub for drawbar weight. Holds a chord without asking for attention. |
+| `pad` | Slow enough that it arrives rather than starts. |
+| `pluck` | Sustain of zero: it decays to nothing while you are still holding it, which is what a plucked string does. Made for arpeggios. |
+| `chime` | Short, bright, bell-like. |
+| `bell` | A triangle has almost no harmonics of its own, which is what lets a long decay ring clean instead of buzzing. |
+| `bass` | Mostly sub, deliberately narrow — low frequencies carry almost no directional information, so spreading them only makes a mix vague. |
+| `hollow` | Bandpass. Sounds like it is being sung down a tube. |
+| `glass` | Highpass. Air rather than a note; thin alone, lovely over something with bottom. |
+| `lo-fi` | Dark, wide and slightly wobbly. |
+
+Each carries an output trim. Left alone they ranged over about 10dB — switching
+from `bell` to `bass` nearly tripled the volume — so each is measured and
+trimmed towards `warm`. They now sit within 1.8dB of each other.
 
 ### Hearing them without launching anything
 
@@ -81,8 +101,8 @@ nothing moving — kept so the difference is audible rather than asserted.
 cd native && cargo run --release -- --render demo.wav
 ```
 
-Plays I–V–vi–IV through all four patches back to back and writes a WAV. A patch
-is judged by ear; no test can do it for you.
+Plays I–V–vi–IV through every patch in turn and writes a WAV (about 68
+seconds). A patch is judged by ear; no test can do it for you.
 
 ## Latency, measured
 
@@ -121,21 +141,32 @@ prints nothing.
 cd native && cargo test
 ```
 
-43 tests, no framework beyond the one built into Cargo.
+50 tests, no framework beyond the one built into Cargo.
 
 **18 cover the theory** — scale generation, triad stacking, octave wrapping in
 both directions, MIDI→frequency, chord naming, arpeggiator patterns, and the
 quality sequences below, in both major and minor across all twelve keys.
 
-**25 cover the DSP**, which is easy to get silently wrong: that detuned
+**32 cover the DSP**, which is easy to get silently wrong: that detuned
 oscillators actually beat (with `raw` as a control that they do *not*), that
 panning holds power constant across the field, that a hard filter sweep at high
 resonance stays finite, that the reverb tail decays rather than running away,
 that its two channels differ at all, that every patch is audible and never clips
-at full 21-voice polyphony, and that a note released mid-attack still sounds.
+at full 21-voice polyphony, and that no two patches render identically.
 
-That last one was a real bug: a voice released before it produced a single sample
-was reaped instantly, so a tap shorter than one audio buffer was **silent**.
+Several go further than "the output changed", which would pass for any change at
+all. A single-bin DFT checks that the sub-oscillator really does put energy an
+octave below the note, and that a highpass really does throw the fundamental
+away — claims that are otherwise easy to believe and wrong.
+
+Two were written after the bug they describe:
+
+- A voice released before it produced a single sample was reaped instantly, so
+  a tap shorter than one audio buffer was **silent**.
+- A zero-sustain patch parked *between* two thresholds forever: decay stopped
+  within 0.001 of the sustain level, but a voice is only retired below 0.0005.
+  `pluck` would have gone silent and stayed alive, burning a slot for as long as
+  you held it. The envelope now snaps to its target instead of approaching it.
 
 ## How the theory works
 

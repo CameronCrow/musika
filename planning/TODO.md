@@ -41,7 +41,10 @@ belongs to the native roadmap at the bottom.
       major/minor, octave, mouse and keyboard, hold-to-sustain. Buffer latency
       5.8ms against the web build's ~56ms.
 - [x] **Named Musika**, embedded icon, GUI subsystem so launching no longer
-      flashes a console. 43 tests.
+      flashes a console.
+- [x] **Eleven patches**, level-matched to within 1.8dB. Added filter modes
+      (bandpass/highpass came free from the state variable filter), a
+      sub-oscillator, vibrato, and a per-patch output trim. 50 tests.
 
 ### Next, in rough order
 
