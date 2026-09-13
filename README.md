@@ -1,5 +1,7 @@
 # Musika
 
+<img src="icons/musika.png" width="112" align="right" alt="Musika icon">
+
 A seven-button chord organ. Every button plays a whole chord, all seven chords
 belong to the same key, so any button sounds fine after any other one. There is
 no wrong note to hit.
@@ -9,7 +11,9 @@ no wrong note to hit.
  C     Dm    Em     F      G     Am    Bdim
 ```
 
-Hold a pad and the chord rings. Let go and it stops. Hold several at once.
+Hold a pad and the chord rings; let go and it stops. Record what you play into a
+loop and stack more on top. Switch the arpeggiator on and held chords turn into
+patterns.
 
 Inspired by the idea behind pocket chord synths like the HiChord; no code or
 assets shared with it.
@@ -52,15 +56,103 @@ crackle under full polyphony.
 
 | | |
 |---|---|
-| **Chords** | `A S D F G H J`, or the number row `1`–`7`. Held for as long as you hold the key. |
-| **Mouse** | Click and drag across the pads. |
-| **Octave** | `-` and `=`, or the buttons. Range −3 to +1; it starts one octave below middle C. |
+| **Chords** | `A S D F G H J`, or the number row `1`–`7`, for as long as you hold the key. Or click and drag across the pads, or use a touchscreen — every finger is its own chord. |
+| **Record** | `space` — see [The looper](#the-looper). |
+| **Play / stop** | `esc` |
+| **Clear** | Unbound on purpose. It wipes the loop with no undo, so it shouldn't be one stray keystroke away. |
+| **Arpeggiator** | `q` toggles it; pattern and tempo sit beside it. |
+| **Octave** | `-` and `=`. Range −3 to +1; it starts one octave below middle C. |
 | **Key / mode** | All 12 roots, major or minor. |
 | **Patch** | Eleven sounds — see [The patches](#the-patches). |
+
+Every key can be changed — see [Your keys](#your-keys) — and everything you set is
+remembered between launches.
 
 The roman numerals on the pads are the notation musicians actually use, so
 "I–V–vi–IV" means press pads 1, 5, 6, 4 — a progression that carries a great many
 pop songs. Play each for a slow count of four.
+
+Touch support is written against egui's touch events but has not yet been tried
+on touch hardware.
+
+## The looper
+
+It works like a guitarist's loop pedal. Press **record**, then play: recording
+starts on your first chord, not on the button, so there is no dead air at the
+front of the loop while you get your hands ready. Press **record** again to close
+the loop — its length is however long you played — and it starts repeating
+straight away. Press **record** once more to overdub on top, and again to stop
+overdubbing. **Stop**, **play** and **clear** do what they say.
+
+The bar under the pads shows where the loop is — amber while playing, red while
+overdubbing — and pads light up as the loop plays them.
+
+**What is recorded is not audio.** Each event is "these pitches started this many
+samples into the loop and were held this long", and playback performs it again.
+That is a few bytes a chord rather than megabytes, it never degrades however many
+times you overdub, and if you switch the arpeggiator on later the loop arpeggiates
+too.
+
+**Pitches, not chord numbers.** What you played was "chord 4 *of C major*", and
+the key is half of that — so a loop stays put when you change key to play over it,
+and a part overdubbed in A minor keeps its own key.
+
+An overdub is heard from the next time round, not in the pass you played it in. It
+joins the loop at the wrap, the one moment the playback position resets anyway, so
+folding it in can never skip or double an event. A chord held over the end of the
+loop is cut at the boundary rather than spilling into the next cycle.
+
+### Why it is exact
+
+The web build needed a look-ahead scheduler: a JavaScript timer waking every 25ms
+to queue notes 120ms ahead of the audio clock, plus special handling so a
+throttled background tab didn't dump a burst of missed notes on its return. None
+of that exists here. The audio thread advances the looper one sample at a time,
+and an event fires on the exact sample it was recorded on. The tests check it to
+the sample.
+
+## The arpeggiator
+
+Hold a chord with the arp on and its notes take turns — one per eighth note at the
+tempo you set — for as long as you hold it. **up** climbs, **down** descends,
+**up-down** bounces.
+
+Three notes at once is a texture; the same three notes in a row is a *pattern*,
+and a pattern has rhythm. That is what makes the instrument sound like finished
+music rather than someone leaning on an organ. The harmony doesn't change at all.
+
+- The first note lands the instant you press, not up to a step late. A second
+  chord pressed while the first is going joins the same grid, so the two stay in
+  time.
+- Up-down plays `0 1 2 1`, never `0 1 2 2 1 0`. Repeating the endpoints makes the
+  turnaround stumble — you hear a limp instead of a pulse.
+- At 120 bpm and 48kHz a step is exactly 12,000 samples, every time.
+- Turning the arp on or off lets go of anything held, because a ringing block
+  chord can't be turned into an arpeggio halfway through a note.
+
+## Your keys
+
+Click **rebind keys**, click a pad or a control, then press the key you want.
+**Esc** finishes. Every control shows the key it is on.
+
+Taking a key from another action leaves that one without it, rather than binding
+one key to two things. Rebinding *replaces* an action's keys instead of adding to
+them — "the key you press is the key for this" is behaviour you can predict
+without being told.
+
+If the window loses focus, held keys are let go. Windows doesn't deliver key-up
+events to a window that isn't focused, so a chord held when you Alt-Tab away
+would otherwise ring forever.
+
+## Settings
+
+Key, mode, octave, patch, the arpeggiator, and every key binding are saved to
+`%APPDATA%\Musika\settings.txt`: plain `name = value` lines, safe to edit in
+Notepad, and deleting the file resets everything.
+
+Loading is forgiving one value at a time. A garbled line or an out-of-range number
+falls back to the default for that value only, because a corrupt settings file
+must never be the reason the instrument won't open.
 
 ## The sound
 
@@ -72,7 +164,7 @@ that separate that from a synthesiser:
 | **Two detuned oscillators** | Two saws a few cents apart drift in and out of phase over about a second. That slow beating *is* what "thick" and "warm" are. One oscillator is perfectly static and reads as synthetic instantly. Biggest single win. |
 | **A real ADSR** | Not just fade in and fade out. The decay — a dip from the initial peak down to the sustain level — is what makes a note sound *struck* rather than switched on. |
 | **A resonant filter that moves** | A fixed lowpass only makes things duller. One that snaps open on the attack and closes over the next few hundred ms is the sound everyone recognises as "a synth". Resonance is a gain bump at the cutoff — a one-pole filter cannot produce it at all. |
-| **Stereo** | The three notes of a chord are panned across the field instead of stacked in the middle, using equal-power panning so nothing dips in loudness crossing the centre. |
+| **Stereo** | The notes of a chord are panned across the field instead of stacked in the middle, using equal-power panning so nothing dips in loudness crossing the centre. |
 | **Reverb** | A dry chord happens inside your head; the same chord with a tail happens *somewhere*. Four comb filters make the tail, two allpasses smear it into a wash, and damping rolls the treble off each pass the way a real room absorbs it. |
 | **Three filter modes** | The state variable filter computes lowpass, bandpass and highpass simultaneously as a side effect of how it works, so offering all three costs one `match`. Bandpass is hollow and vocal; highpass throws away the fundamental and leaves only air. |
 | **A sub-oscillator** | A square an octave below the note. This is where weight comes from — a filtered saw has no bottom of its own, and no amount of lowering the cutoff will give it any. |
@@ -89,7 +181,7 @@ echoes would line up and you would hear a pitch instead of a room.
 | `warm` | The default. Detuned saws, a breathing filter, a room. |
 | `organ` | Bright and completely static, with a sub for drawbar weight. Holds a chord without asking for attention. |
 | `pad` | Slow enough that it arrives rather than starts. |
-| `pluck` | Sustain of zero: it decays to nothing while you are still holding it, which is what a plucked string does. Made for arpeggios. |
+| `pluck` | Sustain of zero: it decays to nothing while you are still holding it, which is what a plucked string does. Made for the arpeggiator. |
 | `chime` | Short, bright, bell-like. |
 | `bell` | A triangle has almost no harmonics of its own, which is what lets a long decay ring clean instead of buzzing. |
 | `bass` | Mostly sub, deliberately narrow — low frequencies carry almost no directional information, so spreading them only makes a mix vague. |
@@ -98,8 +190,8 @@ echoes would line up and you would hear a pitch instead of a room.
 | `lo-fi` | Dark, wide and slightly wobbly. |
 
 Each carries an output trim. Left alone they ranged over about 10dB — switching
-from `bell` to `bass` nearly tripled the volume — so each is measured and
-trimmed towards `warm`. They now sit within 1.8dB of each other.
+from `bell` to `bass` nearly tripled the volume — so each is measured and trimmed
+towards `warm`. They now sit within 1.8dB of each other.
 
 ### Hearing them without launching anything
 
@@ -107,8 +199,32 @@ trimmed towards `warm`. They now sit within 1.8dB of each other.
 cd native && cargo run --release -- --render demo.wav
 ```
 
-Plays I–V–vi–IV through every patch in turn and writes a WAV (about 68
-seconds). A patch is judged by ear; no test can do it for you.
+Plays I–V–vi–IV through every patch in turn and writes a WAV (about 68 seconds).
+A patch is judged by ear; no test can do it for you.
+
+## The icon
+
+A rounded aluminium tile, a dark pocket routed into it, and the pads standing in
+the pocket in their hues — V lit, as if it is being played. It is drawn by
+[`tools/make-icons.py`](tools/make-icons.py), standard library only.
+
+The first icon was three flat bars on a black square. Windows drew it faithfully
+and it still read as a test card, because an icon needs a *silhouette* — a shape
+with an edge that separates from whatever taskbar or wallpaper is behind it. The
+rounded tile with transparent corners is that silhouette.
+
+- **Small sizes are simplified, not shrunk.** Seven keys in a 16px tile are a pixel
+  and a half each and grey into mush, so 16–32px draw three keys and 40–64px draw
+  five.
+- **Sizes below 256px are stored as classic bitmaps.** A PNG is allowed inside an
+  `.ico`, but parts of the Windows shell draw small PNG entries badly or fall back
+  to a generic icon, so only the 256px image is a PNG.
+- **Edges are signed distance fields.** Each pixel measures its distance to a
+  shape's edge, and coverage is that distance clamped over one pixel — smooth
+  anti-aliasing at any size without supersampling.
+- **One source.** `build.rs` embeds `icons/musika.ico` into the exe, and the window
+  icon is `icons/musika-64.rgba` pulled in with `include_bytes!` — so the title
+  bar, Alt-Tab and taskbar can't disagree with the Desktop and Start Menu.
 
 ## Latency, measured
 
@@ -147,28 +263,26 @@ prints nothing.
 cd native && cargo test
 ```
 
-50 tests, no framework beyond the one built into Cargo.
+94 tests, no framework beyond the one built into Cargo.
 
-**18 cover the theory** — scale generation, triad stacking, octave wrapping in
-both directions, MIDI→frequency, chord naming, arpeggiator patterns, and the
-quality sequences below, in both major and minor across all twelve keys.
-
-**32 cover the DSP**, which is easy to get silently wrong: that detuned
-oscillators actually beat (with `raw` as a control that they do *not*), that
-panning holds power constant across the field, that a hard filter sweep at high
-resonance stays finite, that the reverb tail decays rather than running away,
-that its two channels differ at all, that every patch is audible and never clips
-at full 21-voice polyphony, and that no two patches render identically.
+| | |
+|---|---|
+| **20 — theory** | Scale generation, triad stacking, octave wrapping in both directions, MIDI→frequency, chord naming, arpeggiator patterns, and the quality sequences below in major and minor across all twelve keys. |
+| **19 — voice and reverb** | That detuned oscillators actually beat (with `raw` as a control that they do *not*), that panning holds power constant, that a hard filter sweep at high resonance stays finite, that the reverb tail decays rather than running away, that every patch is audible and distinct. |
+| **14 — looper** | To the exact sample: events land on their recorded sample every cycle, an overdub joins at the wrap, a held-over note is cut at the boundary, stop and play restart from the top — and recording never grows past its preallocated storage. |
+| **10 — arpeggiator** | The first note on the press, a second chord joining the first one's grid, each pattern's order, a looped chord playing only inside its span, bad tempos clamped. |
+| **19 — engine** | End to end through the audio thread: a recorded loop coming back round on the exact sample, its pad lighting up, a key change not cutting the loop off, a loop recorded as chords arpeggiating once the arp is on, full polyphony never clipping. |
+| **5 — settings** | A round trip, and a file where every line is broken differently still loading the one good value. |
+| **7 — controls** | Default keys surviving being saved by name, rebinding stealing a key, input ids never colliding with the engine's own. |
 
 Several go further than "the output changed", which would pass for any change at
 all. A single-bin DFT checks that the sub-oscillator really does put energy an
-octave below the note, and that a highpass really does throw the fundamental
-away — claims that are otherwise easy to believe and wrong.
+octave below the note, and that a highpass really does throw the fundamental away.
 
-Two were written after the bug they describe:
+Some were written after the bug they describe:
 
-- A voice released before it produced a single sample was reaped instantly, so
-  a tap shorter than one audio buffer was **silent**.
+- A voice released before it produced a single sample was reaped instantly, so a
+  tap shorter than one audio buffer was **silent**.
 - A zero-sustain patch parked *between* two thresholds forever: decay stopped
   within 0.001 of the sustain level, but a voice is only retired below 0.0005.
   `pluck` would have gone silent and stayed alive, burning a slot for as long as
@@ -228,40 +342,46 @@ native/
   src/theory.rs       the music - pure integer arithmetic, no audio, no UI
   src/voice.rs        one note: oscillators, envelopes, filter, panning
   src/reverb.rs       the room, built out of combs and allpasses
-  src/engine.rs       the audio thread and the mix; one clock, no scheduler
-  src/main.rs         the instrument - window, pads, keyboard
+  src/looper.rs       record / overdub / loop - a state machine over samples
+  src/arp.rs          the arpeggiator, on the same sample clock
+  src/engine.rs       the audio thread: all of the above, mixed
+  src/settings.rs     what is remembered between launches
+  src/main.rs         window, pads, controls, keys, touch
 tools/
-  install-native.ps1  build + install + shortcut, for pinning
-  make-icons.py       generates every icon from the pad hue formula
+  install-native.ps1  build + install + Start Menu and Desktop shortcuts
+  make-icons.py       draws every icon
 icons/                generated, committed
 planning/             milestones and progress
 ```
 
-Five source files, three dependencies (`eframe`, `cpal`, and `winresource` at
-build time only).
+Eight source files, three dependencies: `eframe`, `cpal`, and `winresource` at
+build time only.
+
+The looper and the arpeggiator know nothing about sound. Each is a state machine
+over sample numbers that decides *what should start on which sample* and hands
+that to the engine — which is exactly what lets their tests pin timing to the
+sample without an audio device.
 
 ### The one rule of the audio thread
 
 `fill` in [`engine.rs`](native/src/engine.rs) runs on a real-time thread owned by
 the OS. If it takes too long you don't get a slow instrument, you get a click — a
-hole in the sound. So it never allocates, never locks, never blocks. Notes reach
-it through a queue it can drain without waiting, which is why the UI sends
-messages rather than reaching in and pushing a voice.
+hole in the sound. So it never allocates, never locks, never blocks:
 
-This is also why there is no look-ahead scheduler. In a browser you *schedule*
-against a clock and JavaScript timers drift, so the web build needed two clocks
-carefully kept apart. Here the sound card asks for the next N samples, and the
-count of samples written **is** the clock. Nothing can drift from it.
+- every list it keeps is allocated up front and never grown past that capacity,
+  which the looper and arpeggiator tests check;
+- chords cross from the UI as a fixed-size `Chord`, not a `Vec`, because a `Vec`
+  would be freed on the audio thread when the message is dropped;
+- the overdub merge uses `sort_unstable`, which sorts in place — the stable sort
+  allocates a scratch buffer;
+- what comes back to the UI — loop state, position, which pads are lit — is a
+  handful of atomics, so neither side ever waits for the other.
 
 ## The web build (retired)
 
 The original lives on in `index.html`, `src/*.js` and `sw.js`, still deployed at
 <https://cameroncrow.github.io/musika/>. It is no longer maintained.
 
-It still has two things the native build doesn't: a **looper** (record, overdub,
-loop) and an **arpeggiator**. Both are the obvious next things to port —
-the looper in particular gets simpler on a sample clock, since its look-ahead
-scheduler stops being necessary at all.
-
-It also still has the old square-wave voice, so it is not a fair comparison for
-how Musika sounds now.
+Everything it did, Musika now does natively — the looper, the arpeggiator,
+rebindable keys, remembered settings, multi-touch — on a sample-exact clock, and
+with a voice the web build never had.

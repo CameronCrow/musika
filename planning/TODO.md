@@ -46,15 +46,24 @@ belongs to the native roadmap at the bottom.
       (bandpass/highpass came free from the state variable filter), a
       sub-oscillator, vibrato, and a per-patch output trim. 50 tests.
 
+- [x] **Looper.** Record, overdub, play/stop, clear; recording starts on the
+      first chord; events store pitches, so a loop survives a key change. Runs
+      sample-exact on the audio clock - the web build's look-ahead scheduler has
+      no equivalent here, because there is nothing to look ahead of.
+- [x] **Arpeggiator.** up / down / up-down, 40-240bpm; the first note on the
+      press; a second chord joins the first one's grid; looped chords
+      arpeggiate too.
+- [x] **Rebindable keys, saved settings, multi-touch, the aluminium look.** With
+      these, Musika does everything the web build did. (Touch is untested on
+      touch hardware.)
+- [x] **A real icon.** An aluminium tile with a dark pocket and seven keys,
+      simplified at small sizes, bitmap entries below 256px.
+
 ### Next, in rough order
 
-- [ ] **Looper.** Port from the web build. It gets *simpler* on a sample clock:
-      the look-ahead scheduler stops being necessary at all.
-- [ ] **Arpeggiator.** `arp_sequence` is already ported and tested; it needs a
-      clock and a UI.
-- [ ] **Editable patches** rather than four fixed ones - the `Patch` struct is
+- [ ] **Editable patches** rather than fixed ones - the `Patch` struct is
       already the whole sound, so this is sliders, not architecture.
-- [ ] **7ths and inversions.**
+- [ ] **7ths and inversions.** `Chord` already has room for four notes.
 - [ ] **MIDI in** (`midir`) - the thing a native build can do that no browser
       can do portably.
 

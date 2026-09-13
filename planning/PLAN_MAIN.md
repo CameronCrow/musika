@@ -23,19 +23,17 @@ Two hard rules the project is built around:
 
 ## Current State
 
-**Musika is the native Rust app under `native/`.** Seven pads, all 12 keys,
-major and minor, octave shift, mouse and keyboard, hold-to-sustain, and a real
-synth voice: detuned dual oscillators, ADSR, a resonant filter with its own
-envelope, equal-power stereo panning and a Schroeder reverb. Four patches,
-including `raw` - the original square wave - kept for comparison. 43 tests.
-5.8ms buffer latency. Installs to `%LOCALAPPDATA%\Musika` and pins to the
-taskbar via `tools/install-native.ps1`.
+**Musika is the native Rust app under `native/`, and it now does everything the
+web build did.** Seven pads, all 12 keys, major and minor, octave shift; mouse,
+keyboard and multi-touch; a looper with overdub and an arpeggiator, both running
+sample-exact on the audio clock; every key rebindable; settings saved under
+`%APPDATA%`. Eleven level-matched patches. A designed icon embedded in the exe.
+94 tests. 5.8ms buffer latency.
 
 **The web build is retired.** Still deployed at
-<https://cameroncrow.github.io/musika/> and still the only place the looper and
-arpeggiator exist, but no longer developed. Both are on the native roadmap.
+<https://cameroncrow.github.io/musika/>, no longer developed.
 
-Next: port the looper, then the arpeggiator.
+Next: editable patches, 7ths and inversions, MIDI in.
 
 ## Phases
 

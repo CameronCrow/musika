@@ -1,21 +1,22 @@
 //! Musika - a seven-chord organ.
 //!
 //! Seven pads, each playing a whole chord, all seven belonging to one key, so
-//! there is no wrong note to hit. This is the instrument; the web build it grew
-//! out of is retired.
+//! there is no wrong note to hit. Record what you play into a loop and stack
+//! more on top; switch the arpeggiator on and held chords become patterns.
 //!
 //! Built as a Windows GUI program rather than a console one, which is what stops
 //! a terminal flashing up behind the window. The cost is that a GUI process has
-//! no stdout to print to, so `--probe` and the progress lines from `--render`
-//! only appear from a debug build (`cargo run -- --probe`). `--render` still
-//! writes its WAV either way.
+//! no stdout, so `--probe` and the progress lines from `--render` only print from
+//! a debug build (`cargo run -- --probe`). `--render` still writes its WAV.
 //!
-//! Five files:
-//!   theory.rs  the music - pure integer arithmetic, ported 1:1 from the JS
-//!   voice.rs   what one note sounds like - oscillators, envelopes, filter
-//!   reverb.rs  the room it is played in
-//!   engine.rs  the audio thread and the mix
-//!   main.rs    the instrument - egui window, pads, keyboard
+//!   theory.rs    the music - pure integer arithmetic
+//!   voice.rs     what one note sounds like - oscillators, envelopes, filter
+//!   reverb.rs    the room it is played in
+//!   looper.rs    record / overdub / loop, a state machine over sample numbers
+//!   arp.rs       the arpeggiator, on the same sample clock
+//!   engine.rs    the audio thread: all of the above, mixed
+//!   settings.rs  what is remembered between launches
+//!   main.rs      the instrument - window, pads, controls, keys, touch
 //!
 //! Run it with `cargo run --release`. Debug builds work but the audio thread
 //! has far less headroom, so use release if you hear crackling.
@@ -24,59 +25,192 @@
 // are pure GUI, so launching never spawns a terminal.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod arp;
 mod engine;
+mod looper;
 mod reverb;
+mod settings;
 mod theory;
 mod voice;
 
-use eframe::egui;
-use engine::{Engine, Msg};
-use theory::Mode;
+use eframe::egui::{self, Color32, FontId, Key, Pos2, Rect, RichText};
+use engine::{Engine, Msg, Status};
+use looper::LoopState;
+use settings::{OCTAVE_MAX, OCTAVE_MIN, Settings};
+use theory::{ArpPattern, Chord, Mode};
 use voice::PATCHES;
 
-/// Default keys, matching the web build: home row to play with, number row
-/// because the pads are labelled I..vii and sometimes the thing in your head is
-/// "chord five" rather than "the G key".
-const HOME_ROW: [egui::Key; 7] = [
-    egui::Key::A,
-    egui::Key::S,
-    egui::Key::D,
-    egui::Key::F,
-    egui::Key::G,
-    egui::Key::H,
-    egui::Key::J,
-];
-const NUMBER_ROW: [egui::Key; 7] = [
-    egui::Key::Num1,
-    egui::Key::Num2,
-    egui::Key::Num3,
-    egui::Key::Num4,
-    egui::Key::Num5,
-    egui::Key::Num6,
-    egui::Key::Num7,
+// --- the look ----------------------------------------------------------------
+//
+// The same machined-aluminium language as the retired web build: a graphite
+// shell, a dark pocket routed into it, coloured caps standing in the pocket, and
+// exactly two lamps - amber for "engaged", red for "hot" (armed or recording).
+// Nothing else glows, so the pads stay the loudest thing on the face.
+
+const SHELL: Color32 = Color32::from_rgb(0x43, 0x47, 0x4e);
+const SHELL_HI: Color32 = Color32::from_rgb(0x55, 0x5a, 0x63);
+const SHELL_LO: Color32 = Color32::from_rgb(0x33, 0x36, 0x3c);
+const PLATE: Color32 = Color32::from_rgb(0x1d, 0x20, 0x25);
+const INK: Color32 = Color32::from_rgb(0xee, 0xf1, 0xf6);
+const INK_DIM: Color32 = Color32::from_rgb(0xb6, 0xbc, 0xc6);
+const LAMP: Color32 = Color32::from_rgb(0xff, 0xc2, 0x4a);
+const HOT: Color32 = Color32::from_rgb(0xd8, 0x34, 0x1f);
+
+/// How far a pad travels when pressed, in points. It bottoms out rather than
+/// shrinking, which is what makes it read as a physical key.
+const TRAVEL: f32 = 3.0;
+
+// --- what a key can do ---------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Action {
+    Pad(usize),
+    Record,
+    PlayStop,
+    Clear,
+    Arp,
+    OctaveDown,
+    OctaveUp,
+}
+
+/// Every bindable action, in the order bindings are stored.
+const ACTIONS: [Action; 13] = [
+    Action::Pad(0),
+    Action::Pad(1),
+    Action::Pad(2),
+    Action::Pad(3),
+    Action::Pad(4),
+    Action::Pad(5),
+    Action::Pad(6),
+    Action::Record,
+    Action::PlayStop,
+    Action::Clear,
+    Action::Arp,
+    Action::OctaveDown,
+    Action::OctaveUp,
 ];
 
-/// Where a note-on came from, so releasing one input cannot silence another.
-/// The web version learned this the hard way: holding a pad with both its keys
-/// and letting go of one must not stop the chord.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+impl Action {
+    /// The name used in the settings file.
+    fn name(self) -> &'static str {
+        const PADS: [&str; 7] = ["pad1", "pad2", "pad3", "pad4", "pad5", "pad6", "pad7"];
+        match self {
+            Action::Pad(i) => PADS[i.min(6)],
+            Action::Record => "record",
+            Action::PlayStop => "playstop",
+            Action::Clear => "clear",
+            Action::Arp => "arp",
+            Action::OctaveDown => "octave_down",
+            Action::OctaveUp => "octave_up",
+        }
+    }
+
+    /// The name shown to a person.
+    fn label(self) -> String {
+        match self {
+            Action::Pad(i) => format!("pad {}", i + 1),
+            Action::Record => "record".into(),
+            Action::PlayStop => "play / stop".into(),
+            Action::Clear => "clear".into(),
+            Action::Arp => "arp".into(),
+            Action::OctaveDown => "octave down".into(),
+            Action::OctaveUp => "octave up".into(),
+        }
+    }
+
+    fn index(self) -> usize {
+        ACTIONS.iter().position(|a| *a == self).expect("every action is listed")
+    }
+}
+
+/// The home row to play with, and the number row as well, because the pads are
+/// labelled I..vii and sometimes the thing in your head is "chord five" rather
+/// than "the G key". Clear starts unbound on purpose: it wipes the loop with no
+/// undo, and that should not be one stray keystroke away.
+fn default_bindings() -> Vec<Vec<Key>> {
+    use Key::*;
+    vec![
+        vec![A, Num1],
+        vec![S, Num2],
+        vec![D, Num3],
+        vec![F, Num4],
+        vec![G, Num5],
+        vec![H, Num6],
+        vec![J, Num7],
+        vec![Space],
+        vec![Escape],
+        vec![],
+        vec![Q],
+        vec![Minus],
+        vec![Equals],
+    ]
+}
+
+/// Defaults, overridden by whatever the settings file says for each action.
+fn bindings_from(settings: &Settings) -> Vec<Vec<Key>> {
+    let mut bindings = default_bindings();
+    for (i, action) in ACTIONS.iter().enumerate() {
+        if let Some((_, names)) = settings.bindings.iter().find(|(a, _)| a == action.name()) {
+            bindings[i] = names.iter().filter_map(|n| Key::from_name(n)).collect();
+        }
+    }
+    bindings
+}
+
+/// Give `key` to one action, taking it off anything else that had it.
+///
+/// Rebinding REPLACES that action's keys rather than adding to them: "the key
+/// you press is the key for this" is behaviour you can predict without being
+/// told, and adding would grow the list with no way to shrink it.
+fn bind(bindings: &mut [Vec<Key>], target: usize, key: Key) {
+    for keys in bindings.iter_mut() {
+        keys.retain(|k| *k != key);
+    }
+    bindings[target] = vec![key];
+}
+
+fn key_label(key: Key) -> String {
+    match key {
+        Key::Space => "space".into(),
+        Key::Escape => "esc".into(),
+        Key::Minus => "-".into(),
+        Key::Equals => "=".into(),
+        other => {
+            let name = other.name();
+            name.strip_prefix("Num").unwrap_or(name).to_string()
+        }
+    }
+}
+
+fn keys_label(keys: &[Key]) -> String {
+    keys.iter().map(|k| key_label(*k)).collect::<Vec<_>>().join(" · ")
+}
+
+/// Where a note came from, so letting go of one input cannot silence another -
+/// holding a pad with two fingers and lifting one must not stop the chord.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Source {
-    Key(usize),   // index into HOME_ROW / NUMBER_ROW
-    Number(usize),
+    Key(Key),
     Pointer,
+    Touch(u64),
 }
 
 impl Source {
     /// A stable id the audio thread can match a NoteOff against.
+    ///
+    /// Always below `engine::AUTO_ID_BASE` (2^48), which marks a note as the
+    /// looper's or the arpeggiator's rather than a finger's.
     fn id(self, degree: usize) -> u64 {
-        let slot = match self {
-            Source::Key(i) => i,
-            Source::Number(i) => 100 + i,
-            Source::Pointer => 200,
+        let (kind, sub) = match self {
+            Source::Key(k) => (1u64, k as u64),
+            Source::Pointer => (2, 0),
+            Source::Touch(t) => (3, t & 0xFF_FFFF),
         };
-        (slot as u64) << 8 | degree as u64
+        (kind << 40) | (sub << 8) | degree as u64
     }
 }
+
+// --- the instrument ------------------------------------------------------------
 
 struct Musika {
     engine: Option<Engine>,
@@ -88,42 +222,94 @@ struct Musika {
     patch_index: usize,
     chords: [[i32; 3]; 7],
 
-    /// Which (source, degree) pairs are sounding right now.
+    arp_on: bool,
+    arp_pattern: ArpPattern,
+    bpm: f32,
+
+    bindings: Vec<Vec<Key>>,
+    rebinding: bool,
+    binding_target: Option<usize>,
+
+    /// Which (source, pad) pairs are sounding right now.
     held: Vec<(Source, usize)>,
+    /// Fingers on a touchscreen, and the pad each is on.
+    touches: Vec<(u64, usize)>,
+    /// Whether the current mouse press started on a pad - so dragging out of a
+    /// dropdown and across the pads does not play them.
+    pointer_on_pads: bool,
+    pad_rects: [Rect; 7],
+    /// Settings changed and not yet written.
+    dirty: bool,
 }
 
 impl Musika {
-    fn new() -> Self {
-        // Patch 1 is "warm" - detuned saws with a moving filter and a room
-        // around them. Patch 0 is the bare square the engine started life with,
-        // kept so the difference is audible rather than asserted.
-        let patch_index = 1;
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        style(&cc.egui_ctx);
+
+        let s = Settings::load();
+        let patch_index = PATCHES.iter().position(|p| p.name == s.patch).unwrap_or(1);
         let (engine, error) = match Engine::start(PATCHES[patch_index]) {
             Ok(e) => (Some(e), None),
             Err(e) => (None, Some(e)),
         };
+
         let mut app = Musika {
             engine,
             error,
-            key_pitch: 0,
-            mode: Mode::Major,
-            octave: -1, // an octave below the web default, which plays nicer
+            key_pitch: s.key_pitch,
+            mode: s.mode,
+            octave: s.octave,
             patch_index,
             chords: [[0; 3]; 7],
+            arp_on: s.arp_on,
+            arp_pattern: s.arp_pattern,
+            bpm: s.bpm,
+            bindings: bindings_from(&s),
+            rebinding: false,
+            binding_target: None,
             held: Vec::new(),
+            touches: Vec::new(),
+            pointer_on_pads: false,
+            pad_rects: [Rect::NOTHING; 7],
+            dirty: false,
         };
         app.rebuild_chords();
+        app.send(Msg::SetTempo(app.bpm));
+        app.send(Msg::SetArpPattern(app.arp_pattern));
+        app.send(Msg::SetArp(app.arp_on));
         app
     }
 
+    fn send(&self, msg: Msg) {
+        if let Some(e) = &self.engine {
+            e.send(msg);
+        }
+    }
+
+    fn settings(&self) -> Settings {
+        Settings {
+            key_pitch: self.key_pitch,
+            mode: self.mode,
+            octave: self.octave,
+            patch: PATCHES[self.patch_index].name.to_string(),
+            arp_on: self.arp_on,
+            arp_pattern: self.arp_pattern,
+            bpm: self.bpm,
+            bindings: ACTIONS
+                .iter()
+                .zip(&self.bindings)
+                .map(|(a, keys)| {
+                    (a.name().to_string(), keys.iter().map(|k| k.name().to_string()).collect())
+                })
+                .collect(),
+        }
+    }
+
     /// Keys past F# drop an octave rather than climbing, so no key lands in a
-    /// shrill register - same rule as the web build.
+    /// shrill register.
     fn root_midi(&self) -> i32 {
-        60 + if self.key_pitch > 6 {
-            self.key_pitch - 12
-        } else {
-            self.key_pitch
-        } + self.octave * 12
+        let pitch = if self.key_pitch > 6 { self.key_pitch - 12 } else { self.key_pitch };
+        60 + pitch + self.octave * 12
     }
 
     fn rebuild_chords(&mut self) {
@@ -135,43 +321,596 @@ impl Musika {
             return;
         }
         self.held.push((source, degree));
-        if let Some(e) = &self.engine {
-            e.send(Msg::NoteOn {
-                id: source.id(degree),
-                notes: self.chords[degree].to_vec(),
-            });
-        }
+        self.send(Msg::NoteOn {
+            id: source.id(degree),
+            chord: Chord::new(&self.chords[degree]),
+            degree: degree as u8,
+        });
     }
 
     fn note_off(&mut self, source: Source, degree: usize) {
-        self.held.retain(|&h| h != (source, degree));
-        if let Some(e) = &self.engine {
-            e.send(Msg::NoteOff {
-                id: source.id(degree),
-            });
+        // Only if it was actually down: this is called for every unheld key on
+        // every frame, and each message would be a heap allocation in the
+        // channel for nothing.
+        if let Some(i) = self.held.iter().position(|&h| h == (source, degree)) {
+            self.held.remove(i);
+            self.send(Msg::NoteOff { id: source.id(degree) });
         }
     }
 
     fn release_all(&mut self) {
         self.held.clear();
-        if let Some(e) = &self.engine {
-            e.send(Msg::AllOff);
-        }
+        self.touches.clear();
+        self.send(Msg::ReleaseLive);
     }
 
-    /// True while any input is holding this pad - what lights it up.
     fn is_lit(&self, degree: usize) -> bool {
         self.held.iter().any(|&(_, d)| d == degree)
     }
+
+    fn pad_at(&self, pos: Pos2) -> Option<usize> {
+        self.pad_rects.iter().position(|r| r.contains(pos))
+    }
+
+    // Changing anything about the pitches releases what is held - a chord from
+    // the old key ringing under the new one is just mud. A running loop is not
+    // affected: it stores the pitches it was played with.
+
+    fn set_key(&mut self, pitch: i32, mode: Mode) {
+        if pitch != self.key_pitch || mode != self.mode {
+            self.key_pitch = pitch;
+            self.mode = mode;
+            self.release_all();
+            self.rebuild_chords();
+            self.dirty = true;
+        }
+    }
+
+    fn set_octave(&mut self, octave: i32) {
+        let octave = octave.clamp(OCTAVE_MIN, OCTAVE_MAX);
+        if octave != self.octave {
+            self.octave = octave;
+            self.release_all();
+            self.rebuild_chords();
+            self.dirty = true;
+        }
+    }
+
+    fn set_patch(&mut self, index: usize) {
+        if index != self.patch_index {
+            self.patch_index = index;
+            self.release_all();
+            self.send(Msg::SetPatch(index));
+            self.dirty = true;
+        }
+    }
+
+    fn set_arp(&mut self, on: bool) {
+        self.arp_on = on;
+        self.held.clear();
+        self.touches.clear();
+        self.send(Msg::SetArp(on));
+        self.dirty = true;
+    }
+
+    fn set_rebinding(&mut self, on: bool) {
+        self.rebinding = on;
+        self.binding_target = None;
+        self.release_all();
+    }
+
+    fn do_action(&mut self, action: Action) {
+        match action {
+            Action::Pad(_) => {}
+            Action::Record => self.send(Msg::Pedal),
+            Action::PlayStop => self.send(Msg::PlayStop),
+            Action::Clear => self.send(Msg::ClearLoop),
+            Action::Arp => self.set_arp(!self.arp_on),
+            Action::OctaveDown => self.set_octave(self.octave - 1),
+            Action::OctaveUp => self.set_octave(self.octave + 1),
+        }
+    }
+
+    // --- input -----------------------------------------------------------------
+
+    fn handle_keys(&mut self, ctx: &egui::Context) {
+        // Key-up events never arrive while another window has focus, so a chord
+        // held when you Alt-Tab away would ring forever. Let go instead.
+        if !ctx.input(|i| i.focused) {
+            let keyed: Vec<_> = self
+                .held
+                .iter()
+                .copied()
+                .filter(|(s, _)| matches!(s, Source::Key(_)))
+                .collect();
+            for (source, degree) in keyed {
+                self.note_off(source, degree);
+            }
+            return;
+        }
+
+        let (presses, down) = ctx.input(|i| {
+            let presses: Vec<Key> = i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. }
+                        // Leave shortcuts alone.
+                        if !modifiers.ctrl && !modifiers.alt && !modifiers.command =>
+                    {
+                        Some(*key)
+                    }
+                    _ => None,
+                })
+                .collect();
+            (presses, i.keys_down.clone())
+        });
+
+        if self.rebinding {
+            for key in &presses {
+                if *key == Key::Escape {
+                    self.set_rebinding(false);
+                    break;
+                }
+                if let Some(target) = self.binding_target.take() {
+                    bind(&mut self.bindings, target, *key);
+                    self.dirty = true;
+                }
+            }
+            ctx.input_mut(|i| {
+                for key in &presses {
+                    i.consume_key(egui::Modifiers::NONE, *key);
+                }
+            });
+            return;
+        }
+
+        let bindings = self.bindings.clone();
+        for (i, action) in ACTIONS.iter().enumerate() {
+            match *action {
+                Action::Pad(degree) => {
+                    for &key in &bindings[i] {
+                        if down.contains(&key) {
+                            self.note_on(Source::Key(key), degree);
+                        } else {
+                            self.note_off(Source::Key(key), degree);
+                        }
+                    }
+                }
+                other => {
+                    if bindings[i].iter().any(|k| presses.contains(k)) {
+                        self.do_action(other);
+                    }
+                }
+            }
+        }
+
+        // Swallow the keys the instrument uses, so a button that happens to hold
+        // keyboard focus does not react as well - otherwise space would record
+        // *and* re-click whatever was clicked last.
+        ctx.input_mut(|i| {
+            for key in bindings.iter().flatten() {
+                i.consume_key(egui::Modifiers::NONE, *key);
+            }
+        });
+    }
+
+    /// Fingers on a touchscreen, each one its own voice. Sliding a finger from
+    /// one pad to the next moves the chord with it, like sliding along keys.
+    fn handle_touches(&mut self, ui: &egui::Ui) -> bool {
+        let events: Vec<(u64, egui::TouchPhase, Pos2)> = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Touch { id, phase, pos, .. } => Some((id.0, *phase, *pos)),
+                    _ => None,
+                })
+                .collect()
+        });
+
+        for &(id, phase, pos) in &events {
+            let slot = self.touches.iter().position(|t| t.0 == id);
+            match phase {
+                egui::TouchPhase::Start | egui::TouchPhase::Move => {
+                    let over = self.pad_at(pos);
+                    if self.rebinding {
+                        if phase == egui::TouchPhase::Start {
+                            if let Some(d) = over {
+                                self.binding_target = Some(d);
+                            }
+                        }
+                        continue;
+                    }
+                    let was = slot.map(|i| self.touches[i].1);
+                    if was != over {
+                        if let Some(i) = slot {
+                            self.touches.remove(i);
+                        }
+                        if let Some(d) = was {
+                            self.note_off(Source::Touch(id), d);
+                        }
+                        if let Some(d) = over {
+                            self.note_on(Source::Touch(id), d);
+                            self.touches.push((id, d));
+                        }
+                    }
+                }
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                    if let Some(i) = slot {
+                        let d = self.touches[i].1;
+                        self.touches.remove(i);
+                        self.note_off(Source::Touch(id), d);
+                    }
+                }
+            }
+        }
+
+        // egui also turns the first finger into mouse events. While any finger
+        // is down, ignore the mouse, or that finger would play its chord twice.
+        !events.is_empty() || !self.touches.is_empty()
+    }
+
+    fn handle_pointer(&mut self, ui: &egui::Ui) {
+        let (down, pressed, pos) = ui.input(|i| {
+            (i.pointer.primary_down(), i.pointer.primary_pressed(), i.pointer.interact_pos())
+        });
+        // Only count the pointer as over a pad if nothing - an open dropdown,
+        // say - is drawn on top of the pads at that spot.
+        let over = pos
+            .filter(|p| ui.ctx().layer_id_at(*p) == Some(ui.layer_id()))
+            .and_then(|p| self.pad_at(p));
+
+        if pressed {
+            self.pointer_on_pads = over.is_some();
+        }
+        if !down {
+            self.pointer_on_pads = false;
+        }
+
+        if self.rebinding {
+            if pressed {
+                if let Some(d) = over {
+                    self.binding_target = Some(d);
+                }
+            }
+            return;
+        }
+
+        let target = if down && self.pointer_on_pads { over } else { None };
+        let current = self
+            .held
+            .iter()
+            .find(|(s, _)| *s == Source::Pointer)
+            .map(|&(_, d)| d);
+        if current != target {
+            if let Some(d) = current {
+                self.note_off(Source::Pointer, d);
+            }
+            if let Some(d) = target {
+                self.note_on(Source::Pointer, d);
+            }
+        }
+    }
+
+    // --- drawing ---------------------------------------------------------------
+
+    fn legend(&self, loop_state: LoopState) -> (String, Color32) {
+        if let Some(err) = &self.error {
+            return (err.clone(), HOT);
+        }
+        if self.rebinding {
+            let msg = match self.binding_target {
+                Some(i) => format!(
+                    "press the key for {}   ·   esc to finish",
+                    ACTIONS[i].label()
+                ),
+                None => "click a pad or a control, then press a key   ·   esc to finish".into(),
+            };
+            return (msg, LAMP);
+        }
+
+        let mut text = format!(
+            "MUSIKA   —   {} {}",
+            theory::note_name(self.root_midi()),
+            self.mode.name()
+        );
+        if self.octave != 0 {
+            text += &format!("   ·   oct {:+}", self.octave);
+        }
+        if self.arp_on {
+            text += &format!("   ·   arp {:.0} bpm", self.bpm);
+        }
+        let looping = match loop_state {
+            LoopState::Idle => None,
+            LoopState::Armed => Some("play a chord to start recording"),
+            LoopState::Recording => Some("recording"),
+            LoopState::Playing => Some("looping"),
+            LoopState::Overdub => Some("overdubbing"),
+            LoopState::Stopped => Some("loop stopped"),
+        };
+        if let Some(l) = looping {
+            text += &format!("   ·   {l}");
+        }
+        (text, INK_DIM)
+    }
+
+    /// A control button that shows its bound key, and in rebind mode chooses
+    /// itself as the thing to rebind instead of doing its job. Returns true when
+    /// it should do its job.
+    fn control(
+        &mut self,
+        ui: &mut egui::Ui,
+        action: Action,
+        label: &str,
+        enabled: bool,
+        lamp: Option<Color32>,
+    ) -> bool {
+        let idx = action.index();
+        let targeted = self.rebinding && self.binding_target == Some(idx);
+        let hint = keys_label(&self.bindings[idx]);
+        let text = if targeted {
+            format!("{label}   press a key")
+        } else if hint.is_empty() {
+            label.to_string()
+        } else {
+            format!("{label}   {hint}")
+        };
+
+        let fill = if targeted { Some(LAMP) } else { lamp };
+        let ink = if fill.is_some() { Color32::BLACK } else { INK };
+        let mut button = egui::Button::new(RichText::new(text).color(ink));
+        if let Some(c) = fill {
+            button = button.fill(c);
+        }
+
+        // While rebinding, every control can be picked, even greyed-out ones.
+        if ui.add_enabled(enabled || self.rebinding, button).clicked() {
+            if self.rebinding {
+                self.binding_target = Some(idx);
+                return false;
+            }
+            return true;
+        }
+        false
+    }
+
+    fn controls(&mut self, ui: &mut egui::Ui, loop_state: LoopState) {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+
+            // Transport.
+            let (record_label, hot) = match loop_state {
+                LoopState::Idle => ("● record", false),
+                LoopState::Armed => ("● armed", true),
+                LoopState::Recording => ("● close loop", true),
+                LoopState::Playing | LoopState::Stopped => ("● overdub", false),
+                LoopState::Overdub => ("● end overdub", true),
+            };
+            if self.control(ui, Action::Record, record_label, true, hot.then_some(HOT)) {
+                self.do_action(Action::Record);
+            }
+            let running = loop_state.is_running();
+            let can_play = running || loop_state == LoopState::Stopped;
+            let play_label = if running { "■ stop" } else { "▶ play" };
+            if self.control(ui, Action::PlayStop, play_label, can_play, None) {
+                self.do_action(Action::PlayStop);
+            }
+            let can_clear = !matches!(loop_state, LoopState::Idle | LoopState::Armed);
+            if self.control(ui, Action::Clear, "clear", can_clear, None) {
+                self.do_action(Action::Clear);
+            }
+
+            ui.separator();
+
+            // Sound.
+            let mut patch = self.patch_index;
+            egui::ComboBox::from_id_salt("patch")
+                .selected_text(PATCHES[patch].name)
+                .width(80.0)
+                .show_ui(ui, |ui| {
+                    for (i, p) in PATCHES.iter().enumerate() {
+                        ui.selectable_value(&mut patch, i, p.name);
+                    }
+                });
+            self.set_patch(patch);
+
+            let mut pitch = self.key_pitch;
+            egui::ComboBox::from_id_salt("key")
+                .selected_text(theory::NOTE_NAMES[pitch as usize])
+                .width(48.0)
+                .show_ui(ui, |ui| {
+                    for (i, name) in theory::NOTE_NAMES.iter().enumerate() {
+                        ui.selectable_value(&mut pitch, i as i32, *name);
+                    }
+                });
+            let mut mode = self.mode;
+            egui::ComboBox::from_id_salt("mode")
+                .selected_text(mode.name())
+                .width(64.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut mode, Mode::Major, "major");
+                    ui.selectable_value(&mut mode, Mode::Minor, "minor");
+                });
+            self.set_key(pitch, mode);
+
+            if self.control(ui, Action::OctaveDown, "oct −", self.octave > OCTAVE_MIN, None) {
+                self.do_action(Action::OctaveDown);
+            }
+            if self.control(ui, Action::OctaveUp, "oct +", self.octave < OCTAVE_MAX, None) {
+                self.do_action(Action::OctaveUp);
+            }
+
+            ui.separator();
+
+            // Arpeggiator.
+            if self.control(ui, Action::Arp, "arp", true, self.arp_on.then_some(LAMP)) {
+                self.do_action(Action::Arp);
+            }
+            let mut pattern = self.arp_pattern;
+            egui::ComboBox::from_id_salt("pattern")
+                .selected_text(pattern_label(pattern))
+                .width(72.0)
+                .show_ui(ui, |ui| {
+                    for p in [ArpPattern::Up, ArpPattern::Down, ArpPattern::UpDown] {
+                        ui.selectable_value(&mut pattern, p, pattern_label(p));
+                    }
+                });
+            if pattern != self.arp_pattern {
+                self.arp_pattern = pattern;
+                self.send(Msg::SetArpPattern(pattern));
+                self.dirty = true;
+            }
+            let mut bpm = self.bpm;
+            ui.add(
+                egui::Slider::new(&mut bpm, arp::MIN_BPM..=arp::MAX_BPM)
+                    .step_by(1.0)
+                    .fixed_decimals(0)
+                    .suffix(" bpm"),
+            );
+            if bpm != self.bpm {
+                self.bpm = bpm;
+                self.send(Msg::SetTempo(bpm));
+                self.dirty = true;
+            }
+
+            ui.separator();
+
+            let label = if self.rebinding { "done" } else { "rebind keys" };
+            let mut button =
+                egui::Button::new(RichText::new(label).color(if self.rebinding { Color32::BLACK } else { INK }));
+            if self.rebinding {
+                button = button.fill(LAMP);
+            }
+            if ui.add(button).clicked() {
+                self.set_rebinding(!self.rebinding);
+            }
+        });
+    }
+
+    fn pads(&mut self, ui: &mut egui::Ui, status: Option<&Status>) {
+        let full = ui.available_rect_before_wrap();
+        let bar_h = 6.0;
+        let plate = Rect::from_min_max(full.min, egui::pos2(full.max.x, full.max.y - bar_h - 10.0));
+        let inner = plate.shrink(12.0);
+        let gap = 10.0;
+        let w = (inner.width() - gap * 6.0) / 7.0;
+        for degree in 0..7 {
+            let x = inner.left() + degree as f32 * (w + gap);
+            self.pad_rects[degree] = Rect::from_min_size(
+                egui::pos2(x, inner.top()),
+                egui::vec2(w, inner.height() - TRAVEL),
+            );
+        }
+
+        let touching = self.handle_touches(ui);
+        if !touching {
+            self.handle_pointer(ui);
+        }
+
+        let painter = ui.painter().clone();
+        painter.rect_filled(plate, 16.0, PLATE);
+
+        for degree in 0..7 {
+            let rect = self.pad_rects[degree];
+            let lit = self.is_lit(degree);
+            let looping = status.map(|s| s.pad_looping(degree)).unwrap_or(false);
+            let targeted = self.rebinding && self.binding_target == Some(degree);
+            let hue = degree as f32 * 360.0 / 7.0;
+
+            // The side wall a cap stands on shows below it while it is up;
+            // pressed, the cap drops onto it and the wall disappears.
+            let cap = if lit { rect.translate(egui::vec2(0.0, TRAVEL)) } else { rect };
+            if !lit {
+                painter.rect_filled(rect.translate(egui::vec2(0.0, TRAVEL)), 12.0, hsl(hue, 0.35, 0.18));
+            }
+            if looping || targeted {
+                painter.rect_filled(cap.expand(3.0), 14.0, LAMP.gamma_multiply(if targeted { 1.0 } else { 0.75 }));
+            }
+            let (s, l) = if lit {
+                (0.94, 0.62)
+            } else if looping {
+                (0.60, 0.48)
+            } else {
+                (0.33, 0.37)
+            };
+            painter.rect_filled(cap, 12.0, hsl(hue, s, l));
+            // Light catching the top edge of the cap.
+            painter.rect_filled(
+                Rect::from_min_size(cap.min + egui::vec2(10.0, 3.0), egui::vec2(cap.width() - 20.0, 2.0)),
+                1.0,
+                Color32::from_white_alpha(if lit { 90 } else { 45 }),
+            );
+
+            let chord = &self.chords[degree];
+            let center = cap.center();
+            painter.text(
+                center + egui::vec2(0.0, -28.0),
+                egui::Align2::CENTER_CENTER,
+                theory::roman_numeral(chord, degree),
+                FontId::proportional(32.0),
+                INK,
+            );
+            painter.text(
+                center + egui::vec2(0.0, 6.0),
+                egui::Align2::CENTER_CENTER,
+                theory::chord_name(chord),
+                FontId::proportional(17.0),
+                INK,
+            );
+            painter.text(
+                center + egui::vec2(0.0, 28.0),
+                egui::Align2::CENTER_CENTER,
+                chord.iter().map(|&n| theory::note_name(n)).collect::<Vec<_>>().join(" "),
+                FontId::monospace(12.0),
+                INK.gamma_multiply(0.65),
+            );
+            let hint = if targeted {
+                "press a key".to_string()
+            } else {
+                keys_label(&self.bindings[degree])
+            };
+            painter.text(
+                egui::pos2(center.x, cap.bottom() - 18.0),
+                egui::Align2::CENTER_CENTER,
+                if hint.is_empty() { "--".to_string() } else { hint },
+                FontId::monospace(11.0),
+                INK.gamma_multiply(0.55),
+            );
+        }
+
+        // Where the loop is, so overdubbing in time is possible at all.
+        let bar = Rect::from_min_max(
+            egui::pos2(full.left() + 4.0, full.bottom() - bar_h),
+            egui::pos2(full.right() - 4.0, full.bottom()),
+        );
+        painter.rect_filled(bar, 3.0, SHELL_LO);
+        if let Some(s) = status {
+            let state = s.loop_state();
+            let (fraction, colour) = match state {
+                LoopState::Playing => (s.loop_position(), LAMP),
+                LoopState::Overdub => (s.loop_position(), HOT),
+                LoopState::Recording => (1.0, HOT.gamma_multiply(0.5)),
+                _ => (0.0, LAMP),
+            };
+            if fraction > 0.0 {
+                let filled = Rect::from_min_size(bar.min, egui::vec2(bar.width() * fraction, bar.height()));
+                painter.rect_filled(filled, 3.0, colour);
+            }
+        }
+    }
 }
 
-/// The seven pad hues, spread evenly round the colour wheel - the same formula
-/// the web build and the app icon use, so all three look like one instrument.
-fn pad_color(degree: usize, lit: bool) -> egui::Color32 {
-    let hue = degree as f32 * 360.0 / 7.0;
-    let (s, l) = if lit { (0.94, 0.65) } else { (0.33, 0.37) };
-    let (r, g, b) = hsl_to_rgb(hue, s, l);
-    egui::Color32::from_rgb(r, g, b)
+fn pattern_label(p: ArpPattern) -> &'static str {
+    match p {
+        ArpPattern::Up => "up",
+        ArpPattern::Down => "down",
+        ArpPattern::UpDown => "up-down",
+    }
+}
+
+fn hsl(h: f32, s: f32, l: f32) -> Color32 {
+    let (r, g, b) = hsl_to_rgb(h, s, l);
+    Color32::from_rgb(r, g, b)
 }
 
 fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
@@ -194,291 +933,60 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     )
 }
 
+fn style(ctx: &egui::Context) {
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = SHELL;
+    v.window_fill = SHELL_LO;
+    v.extreme_bg_color = PLATE;
+    v.override_text_color = Some(INK);
+    v.selection.bg_fill = LAMP.gamma_multiply(0.6);
+    v.widgets.inactive.weak_bg_fill = SHELL_LO;
+    v.widgets.inactive.bg_fill = SHELL_LO;
+    v.widgets.hovered.weak_bg_fill = SHELL_HI;
+    v.widgets.hovered.bg_fill = SHELL_HI;
+    v.widgets.active.weak_bg_fill = SHELL_HI;
+    v.widgets.active.bg_fill = SHELL_HI;
+    ctx.set_visuals(v);
+}
+
 impl eframe::App for Musika {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_keys(&ctx);
 
+        let status = self.engine.as_ref().map(|e| e.status.clone());
+        let loop_state = status.as_ref().map(|s| s.loop_state()).unwrap_or(LoopState::Idle);
+
+        let (legend, legend_colour) = self.legend(loop_state);
         egui::Panel::top("legend").show(ui, |ui| {
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             ui.vertical_centered(|ui| {
-                if let Some(err) = &self.error {
-                    ui.colored_label(egui::Color32::from_rgb(216, 52, 31), err);
-                } else {
-                    ui.label(self.legend());
-                }
+                ui.label(RichText::new(legend).monospace().color(legend_colour));
             });
-            ui.add_space(4.0);
+            ui.add_space(6.0);
         });
 
         egui::Panel::bottom("controls").show(ui, |ui| {
-            ui.add_space(6.0);
-            self.controls(ui);
-            ui.add_space(6.0);
+            ui.add_space(8.0);
+            self.controls(ui, loop_state);
+            ui.add_space(8.0);
         });
 
-        egui::CentralPanel::default().show(ui, |ui| self.pads(ui));
+        egui::CentralPanel::default().show(ui, |ui| self.pads(ui, status.as_deref()));
 
-        // Keys are polled per frame, so the window must keep drawing even when
-        // nothing has moved - otherwise a held chord would not register until
-        // the mouse twitched.
+        // Write settings once a change settles - not on every frame of a tempo
+        // slider drag.
+        if self.dirty && !ctx.input(|i| i.pointer.any_down()) {
+            let _ = self.settings().save();
+            self.dirty = false;
+        }
+
+        // Keys are polled and the loop bar moves, so keep drawing.
         ctx.request_repaint();
     }
 }
 
-impl Musika {
-    fn legend(&self) -> String {
-        let key = format!(
-            "{} {}",
-            theory::note_name(self.root_midi()),
-            self.mode.name()
-        );
-        let oct = if self.octave == 0 {
-            String::new()
-        } else {
-            format!("  ·  oct {:+}", self.octave)
-        };
-        let latency = match self.engine.as_ref().and_then(|e| e.buffer_latency_ms()) {
-            Some(ms) => format!("  ·  buffer {ms:.1}ms"),
-            None => String::new(),
-        };
-        format!("MUSIKA  —  key of {key}{oct}{latency}")
-    }
-
-    fn handle_keys(&mut self, ctx: &egui::Context) {
-        // egui hands us the set of keys currently down, which is exactly the
-        // hold-to-sustain model: diff it against what we are already sounding.
-        let down = ctx.input(|i| i.keys_down.clone());
-
-        for degree in 0..7 {
-            for (key, source) in [
-                (HOME_ROW[degree], Source::Key(degree)),
-                (NUMBER_ROW[degree], Source::Number(degree)),
-            ] {
-                if down.contains(&key) {
-                    self.note_on(source, degree);
-                } else {
-                    self.note_off(source, degree);
-                }
-            }
-        }
-
-        // Octave, matching the web build's - and = keys.
-        if ctx.input(|i| i.key_pressed(egui::Key::Minus)) {
-            self.set_octave(self.octave - 1);
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Equals)) {
-            self.set_octave(self.octave + 1);
-        }
-    }
-
-    fn set_octave(&mut self, octave: i32) {
-        let clamped = octave.clamp(-3, 1);
-        if clamped != self.octave {
-            self.octave = clamped;
-            self.release_all();
-            self.rebuild_chords();
-        }
-    }
-
-    fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-
-            if ui.add_enabled(self.octave > -3, egui::Button::new("oct −")).clicked() {
-                self.set_octave(self.octave - 1);
-            }
-            if ui.add_enabled(self.octave < 1, egui::Button::new("oct +")).clicked() {
-                self.set_octave(self.octave + 1);
-            }
-
-            ui.separator();
-
-            let mut patch = self.patch_index;
-            egui::ComboBox::from_id_salt("patch")
-                .selected_text(PATCHES[patch].name)
-                .width(84.0)
-                .show_ui(ui, |ui| {
-                    for (i, p) in PATCHES.iter().enumerate() {
-                        ui.selectable_value(&mut patch, i, p.name);
-                    }
-                });
-            if patch != self.patch_index {
-                self.patch_index = patch;
-                self.release_all();
-                if let Some(e) = &self.engine {
-                    e.send(Msg::SetPatch(patch));
-                }
-            }
-
-            ui.separator();
-
-            let mut pitch = self.key_pitch;
-            egui::ComboBox::from_id_salt("key")
-                .selected_text(theory::NOTE_NAMES[pitch as usize])
-                .width(56.0)
-                .show_ui(ui, |ui| {
-                    for (i, name) in theory::NOTE_NAMES.iter().enumerate() {
-                        ui.selectable_value(&mut pitch, i as i32, *name);
-                    }
-                });
-
-            let mut mode = self.mode;
-            egui::ComboBox::from_id_salt("mode")
-                .selected_text(mode.name())
-                .width(76.0)
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut mode, Mode::Major, "major");
-                    ui.selectable_value(&mut mode, Mode::Minor, "minor");
-                });
-
-            if pitch != self.key_pitch || mode != self.mode {
-                self.key_pitch = pitch;
-                self.mode = mode;
-                self.release_all();
-                self.rebuild_chords();
-            }
-
-            ui.separator();
-            if let Some(e) = &self.engine {
-                ui.weak(format!("{} @ {:.0}Hz", e.device_name, e.sample_rate));
-            }
-        });
-    }
-
-    fn pads(&mut self, ui: &mut egui::Ui) {
-        let rect = ui.available_rect_before_wrap();
-        let gap = 8.0;
-        let w = (rect.width() - gap * 6.0) / 7.0;
-
-        // Pointer input: one finger, tracked across pads so dragging from one to
-        // the next behaves like sliding along a keyboard.
-        let pointer_down = ui.input(|i| i.pointer.primary_down());
-        let pointer_pos = ui.input(|i| i.pointer.interact_pos());
-        let mut pointer_target: Option<usize> = None;
-
-        for degree in 0..7 {
-            let x = rect.left() + degree as f32 * (w + gap);
-            let pad = egui::Rect::from_min_size(
-                egui::pos2(x, rect.top()),
-                egui::vec2(w, rect.height()),
-            );
-
-            if pointer_down {
-                if let Some(p) = pointer_pos {
-                    if pad.contains(p) {
-                        pointer_target = Some(degree);
-                    }
-                }
-            }
-
-            let lit = self.is_lit(degree);
-            let painter = ui.painter();
-            painter.rect_filled(
-                pad.shrink(if lit { 2.0 } else { 0.0 }),
-                10.0,
-                pad_color(degree, lit),
-            );
-
-            let chord = &self.chords[degree];
-            let cx = pad.center().x;
-            let cy = pad.center().y;
-            let ink = egui::Color32::from_rgb(238, 241, 246);
-
-            painter.text(
-                egui::pos2(cx, cy - 26.0),
-                egui::Align2::CENTER_CENTER,
-                theory::roman_numeral(chord, degree),
-                egui::FontId::proportional(30.0),
-                ink,
-            );
-            painter.text(
-                egui::pos2(cx, cy + 6.0),
-                egui::Align2::CENTER_CENTER,
-                theory::chord_name(chord),
-                egui::FontId::proportional(17.0),
-                ink,
-            );
-            painter.text(
-                egui::pos2(cx, cy + 28.0),
-                egui::Align2::CENTER_CENTER,
-                chord
-                    .iter()
-                    .map(|&n| theory::note_name(n))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                egui::FontId::monospace(12.0),
-                ink.gamma_multiply(0.65),
-            );
-            painter.text(
-                egui::pos2(cx, cy + 50.0),
-                egui::Align2::CENTER_CENTER,
-                format!("{} / {}", pad_key_label(degree), degree + 1),
-                egui::FontId::monospace(11.0),
-                ink.gamma_multiply(0.5),
-            );
-        }
-
-        // Apply the pointer last, so moving between pads releases the old one.
-        let currently = self.held.iter().find(|&&(s, _)| s == Source::Pointer).map(|&(_, d)| d);
-        if currently != pointer_target {
-            if let Some(d) = currently {
-                self.note_off(Source::Pointer, d);
-            }
-            if let Some(d) = pointer_target {
-                self.note_on(Source::Pointer, d);
-            }
-        }
-    }
-}
-
-/// The window and taskbar icon, drawn rather than loaded.
-///
-/// It is a picture of the instrument: seven bars in the seven pad hues, on the
-/// plate colour. Generating it here costs one loop and buys two things - no
-/// image-decoder dependency, and no asset file that could quietly drift out of
-/// step with the pads, since it runs the same hue formula they do.
-fn app_icon() -> egui::IconData {
-    const N: i32 = 64;
-    let inset = N as f32 * 0.10;
-    let span = N as f32 - 2.0 * inset;
-    let gap = span / 7.0 * 0.16;
-    let bar_w = (span - gap * 6.0) / 7.0;
-
-    // Precompute the seven bar colours rather than converting per pixel.
-    let bars: Vec<(f32, (u8, u8, u8))> = (0..7)
-        .map(|d| {
-            let x0 = inset + d as f32 * (bar_w + gap);
-            (x0, hsl_to_rgb(d as f32 * 360.0 / 7.0, 0.62, 0.52))
-        })
-        .collect();
-
-    let mut rgba = Vec::with_capacity((N * N * 4) as usize);
-    for y in 0..N {
-        for x in 0..N {
-            let (fx, fy) = (x as f32, y as f32);
-            let mut px = (26u8, 29u8, 34u8); // the plate the pads sit in
-            if fy >= inset && fy < N as f32 - inset {
-                for &(x0, colour) in &bars {
-                    if fx >= x0 && fx < x0 + bar_w {
-                        px = colour;
-                    }
-                }
-            }
-            rgba.extend_from_slice(&[px.0, px.1, px.2, 255]);
-        }
-    }
-
-    egui::IconData {
-        rgba,
-        width: N as u32,
-        height: N as u32,
-    }
-}
-
-fn pad_key_label(degree: usize) -> &'static str {
-    ["A", "S", "D", "F", "G", "H", "J"][degree]
-}
+// --- the command line ---------------------------------------------------------
 
 /// Minimal 16-bit stereo WAV. No dependency: a WAV is a 44-byte header and
 /// then the samples, and everything here is `to_le_bytes`.
@@ -509,17 +1017,12 @@ fn write_wav(path: &str, samples: &[f32], sample_rate: u32) -> Result<(), String
 }
 
 /// Play I-V-vi-IV through every patch in turn and write it to a WAV.
-///
-/// A synth patch is judged by ear, not by assertion, and this is how you hear
-/// all four back to back without launching anything - including "raw", which is
-/// what the instrument sounded like before it had a voice worth the name.
 fn render_demo(path: &str) -> Result<(), String> {
     const SR: f32 = 48_000.0;
     const HOLD: f32 = 1.15;
 
-    // C major down an octave, the register the app actually starts in.
+    // C major down an octave, the register the app starts in.
     let chords = theory::chords_in_key(48, &theory::MAJOR_SCALE);
-    // The progression in the README: I, V, vi, IV.
     let progression = [0usize, 4, 5, 3];
     let tail = 1.6; // room for the release and the reverb behind it
     let per_patch = progression.len() as f32 * HOLD + tail;
@@ -529,9 +1032,11 @@ fn render_demo(path: &str) -> Result<(), String> {
         let mut events = Vec::new();
         for (i, &degree) in progression.iter().enumerate() {
             let t = i as f32 * HOLD;
-            events.push((t, Msg::NoteOn { id: i as u64, notes: chords[degree].to_vec() }));
-            // Let go just before the next chord, so they overlap slightly the
-            // way a person playing would.
+            events.push((
+                t,
+                Msg::NoteOn { id: i as u64, chord: Chord::new(&chords[degree]), degree: degree as u8 },
+            ));
+            // Let go just before the next chord, as a person playing would.
             events.push((t + HOLD * 0.94, Msg::NoteOff { id: i as u64 }));
         }
         println!("rendering '{}'...", patch.name);
@@ -544,6 +1049,16 @@ fn render_demo(path: &str) -> Result<(), String> {
     println!("wrote {path}  ({secs:.1}s, {:.1}s each)", per_patch);
     println!("order: {}", order.join(", "));
     Ok(())
+}
+
+/// The window, title bar, Alt-Tab and taskbar icon.
+///
+/// Drawn by tools/make-icons.py - the same generator that makes the .ico
+/// embedded into the exe - so the running window can never disagree with the
+/// Desktop and Start Menu shortcuts.
+fn app_icon() -> egui::IconData {
+    const RGBA: &[u8] = include_bytes!("../../icons/musika-64.rgba");
+    egui::IconData { rgba: RGBA.to_vec(), width: 64, height: 64 }
 }
 
 fn main() -> eframe::Result<()> {
@@ -582,18 +1097,85 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([980.0, 520.0])
-            .with_min_inner_size([620.0, 360.0])
+            .with_inner_size([1100.0, 600.0])
+            .with_min_inner_size([760.0, 420.0])
             .with_icon(std::sync::Arc::new(app_icon()))
             .with_title("Musika"),
         ..Default::default()
     };
-    eframe::run_native(
-        "Musika",
-        options,
-        Box::new(|cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
-            Ok(Box::new(Musika::new()))
-        }),
-    )
+    eframe::run_native("Musika", options, Box::new(|cc| Ok(Box::new(Musika::new(cc)))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_action_has_a_default_binding_slot() {
+        assert_eq!(default_bindings().len(), ACTIONS.len());
+    }
+
+    #[test]
+    fn no_key_starts_bound_to_two_things() {
+        let all: Vec<Key> = default_bindings().into_iter().flatten().collect();
+        let mut unique = all.clone();
+        unique.sort_by_key(|k| *k as u32);
+        unique.dedup();
+        assert_eq!(all.len(), unique.len(), "a default key is bound twice");
+    }
+
+    #[test]
+    fn default_keys_survive_being_saved_by_name() {
+        // Bindings are stored as key names; one that did not read back would
+        // silently vanish on the next launch.
+        for key in default_bindings().into_iter().flatten() {
+            assert_eq!(Key::from_name(key.name()), Some(key), "{key:?} does not round-trip");
+        }
+    }
+
+    #[test]
+    fn rebinding_steals_the_key_from_whatever_had_it() {
+        let mut b = default_bindings();
+        let arp = Action::Arp.index();
+        bind(&mut b, arp, Key::A); // A was pad 1's
+        assert_eq!(b[arp], vec![Key::A]);
+        assert_eq!(b[0], vec![Key::Num1], "pad 1 should have lost A but kept 1");
+    }
+
+    #[test]
+    fn bindings_saved_and_loaded_come_back_the_same() {
+        let mut s = Settings::default();
+        let mut b = default_bindings();
+        bind(&mut b, Action::Clear.index(), Key::Delete);
+        s.bindings = ACTIONS
+            .iter()
+            .zip(&b)
+            .map(|(a, keys)| (a.name().to_string(), keys.iter().map(|k| k.name().to_string()).collect()))
+            .collect();
+        let reloaded = bindings_from(&Settings::parse(&s.to_text()));
+        assert_eq!(reloaded, b);
+    }
+
+    #[test]
+    fn input_ids_never_collide_with_the_engine_s_own() {
+        let sources = [
+            Source::Key(Key::Z),
+            Source::Key(Key::Num9),
+            Source::Pointer,
+            Source::Touch(u64::MAX),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for s in sources {
+            for degree in 0..7 {
+                let id = s.id(degree);
+                assert!(id < engine::AUTO_ID_BASE, "{s:?} id {id} is in the engine's range");
+                assert!(seen.insert(id), "{s:?} pad {degree} collides");
+            }
+        }
+    }
+
+    #[test]
+    fn the_embedded_window_icon_is_the_right_size() {
+        assert_eq!(app_icon().rgba.len(), 64 * 64 * 4);
+    }
 }

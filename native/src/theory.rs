@@ -156,9 +156,6 @@ pub fn chords_in_key(root_midi: i32, pattern: &[i32; 7]) -> [[i32; 3]; 7] {
 /// sounds the top note twice in a row and the turnaround stumbles - a limp
 /// rather than a pulse. Chords shorter than three notes have no interior notes
 /// to bounce off, so up-down is simply up.
-// Ported ahead of its UI - the arpeggiator is the next thing to land, and
-// porting the pattern logic twice would be sillier than one attribute.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArpPattern {
     Up,
@@ -166,8 +163,9 @@ pub enum ArpPattern {
     UpDown,
 }
 
-// Ported ahead of its UI along with ArpPattern above; the arpeggiator is
-// the next thing to land on the native side.
+// The readable definition of the patterns, and the reference `arp_index` is
+// tested against. The audio thread calls `arp_index` instead: same answer,
+// without building a Vec - and building a Vec allocates.
 #[allow(dead_code)]
 pub fn arp_sequence(pattern: ArpPattern, length: usize) -> Vec<usize> {
     let up: Vec<usize> = (0..length).collect();
@@ -180,6 +178,64 @@ pub fn arp_sequence(pattern: ArpPattern, length: usize) -> Vec<usize> {
             seq.extend(up[1..length - 1].iter().rev());
             seq
         }
+    }
+}
+
+/// Which note of an `n`-note chord to play on step `step` of a pattern.
+///
+/// Exactly `arp_sequence(pattern, n)[step % its length]`, computed rather than
+/// looked up. Up-down is a triangle wave over the indices: it rises for n-1
+/// steps and falls for n-1 steps, so its period is 2n-2 - which for a triad is
+/// the 0 1 2 1 that never repeats its endpoints.
+pub fn arp_index(pattern: ArpPattern, n: usize, step: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    match pattern {
+        ArpPattern::Up => step % n,
+        ArpPattern::Down => n - 1 - step % n,
+        ArpPattern::UpDown if n < 3 => step % n,
+        ArpPattern::UpDown => {
+            let period = 2 * n - 2;
+            let p = step % period;
+            if p < n { p } else { period - p }
+        }
+    }
+}
+
+/// A handful of pitches that sound together - a triad today, with room for a
+/// 7th.
+///
+/// A fixed-size array rather than a `Vec`, because chords are sent to the audio
+/// thread. A `Vec` would be freed on that thread when the message is dropped,
+/// and freeing memory takes the allocator an unbounded amount of time - exactly
+/// what the audio thread must never wait on. This is `Copy` and lives on the
+/// stack, so sending one costs nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Chord {
+    pub notes: [i32; 4],
+    len: u8,
+}
+
+impl Chord {
+    /// Keeps the first four pitches given.
+    pub fn new(notes: &[i32]) -> Self {
+        let n = notes.len().min(4);
+        let mut array = [0; 4];
+        array[..n].copy_from_slice(&notes[..n]);
+        Chord { notes: array, len: n as u8 }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn as_slice(&self) -> &[i32] {
+        &self.notes[..self.len()]
     }
 }
 
@@ -359,6 +415,31 @@ mod tests {
         assert_eq!(arp_sequence(ArpPattern::Down, 1), vec![0]);
         assert!(arp_sequence(ArpPattern::Up, 0).is_empty());
         assert!(arp_sequence(ArpPattern::UpDown, 0).is_empty());
+    }
+
+    #[test]
+    fn arp_index_agrees_with_the_readable_definition() {
+        for pattern in [ArpPattern::Up, ArpPattern::Down, ArpPattern::UpDown] {
+            for n in 1..=6usize {
+                let seq = arp_sequence(pattern, n);
+                for step in 0..seq.len() * 3 {
+                    assert_eq!(
+                        arp_index(pattern, n, step),
+                        seq[step % seq.len()],
+                        "{pattern:?} n={n} step={step}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_chord_keeps_its_pitches_and_caps_at_four() {
+        let c = Chord::new(&[60, 64, 67]);
+        assert_eq!(c.as_slice(), &[60, 64, 67]);
+        assert_eq!(c.len(), 3);
+        assert_eq!(Chord::new(&[1, 2, 3, 4, 5]).as_slice(), &[1, 2, 3, 4]);
+        assert!(Chord::new(&[]).is_empty());
     }
 
     #[test]
