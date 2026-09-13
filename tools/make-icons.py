@@ -1,186 +1,257 @@
 #!/usr/bin/env python3
 """
-Generate Musika's app icons.
-
-The icon is the instrument: bars in the pad hues, on the colour of the plate
-they sit in. Those hues come from the same formula the pads use - degree * 360
-/ 7 - so if the palette ever changes, rerun this rather than hand-editing a PNG.
-
-Small sizes draw fewer, fatter bars; see bars_for(). musika.ico is embedded into
-the executable by native/build.rs.
+Generate Musika's icons.
 
     python tools/make-icons.py
 
-One-shot; the output is committed. No dependencies (stdlib zlib writes the PNG),
-because adding Pillow to a project with no build step to draw seven rectangles
-would be silly.
+writes
+
+    icons/musika.ico       embedded into musika.exe by native/build.rs, and
+                           used by the Start Menu and Desktop shortcuts
+    icons/musika.png       the 256px version, for looking at
+    icons/musika-64.rgba   raw 64x64 RGBA pixels that native/src/main.rs pulls in
+                           with include_bytes! as the window icon - so the title
+                           bar, Alt-Tab and the taskbar all show the same drawing
+
+THE DESIGN
+
+The instrument, as an object: a rounded tile of brushed aluminium, a dark
+pocket routed into it, and the pads standing in the pocket in their hues - one
+of them lit, as if it is being played. It is the same machined-metal language as
+the app itself.
+
+The previous icon was three flat bars on a black square. Windows rendered it
+faithfully, and it still read as a test card rather than an application,
+because an icon needs a silhouette: a shape with an edge that separates from
+whatever taskbar or wallpaper is behind it. The rounded tile with transparent
+corners is that silhouette.
+
+Small sizes are simplified rather than shrunk. Seven keys in a 16px tile are a
+pixel and a half each and grey into mush, so 16-32px draw three keys, 40-64px
+draw five, and larger sizes draw all seven.
+
+HOW IT IS DRAWN
+
+Every shape is a rounded rectangle measured with a signed distance function:
+for each pixel, how far it is from the shape's edge. Coverage is then a clamp of
+that distance over one pixel, which gives smooth anti-aliased edges at any size
+without supersampling - and it matters most at 16px, where a hard edge would
+leave a staircase.
+
+Stdlib only.
 """
 
+import math
 import struct
 import zlib
 from pathlib import Path
 
-BG = (33, 36, 41)          # the plate: the pocket the pads sit in
-PADS = 7
-SUPERSAMPLE = 2            # render double size, box-filter down: cheap anti-aliasing
-
 OUT = Path(__file__).resolve().parent.parent / "icons"
+PADS = 7
+
+# Aluminium, lit from above.
+ALU_TOP = (0.87, 0.89, 0.92)
+ALU_BOT = (0.55, 0.58, 0.63)
+# The pocket the keys stand in: darkest at the top, where the lip shades it.
+PLATE_TOP = (0.08, 0.09, 0.11)
+PLATE_BOT = (0.17, 0.18, 0.21)
 
 
-def hsl_to_rgb(h, s, l):
-    """CSS hsl() -> 8-bit RGB, so the icon matches the stylesheet exactly."""
+def hsl(h, s, l):
+    """CSS-style hsl() as 0..1 floats - the same colour model the pads use."""
+    l = max(0.0, min(1.0, l))
     h = (h % 360) / 360.0
     c = (1 - abs(2 * l - 1)) * s
     x = c * (1 - abs((h * 6) % 2 - 1))
     m = l - c / 2
     r, g, b = [(c, x, 0), (x, c, 0), (0, c, x),
                (0, x, c), (x, 0, c), (c, 0, x)][int(h * 6) % 6]
-    return tuple(int(round((v + m) * 255)) for v in (r, g, b))
+    return (r + m, g + m, b + m)
 
 
-def bars_for(size):
-    """How many bars to draw at a given icon size.
-
-    Seven bars inside a 16px tile leaves each one about a pixel and a half wide,
-    with a gap narrower than that - it greys into mush and reads as nothing.
-    Small sizes therefore draw a simplified mark with fewer, fatter bars, which
-    is ordinary icon practice: the shape survives, the detail goes. The hues
-    still span the whole wheel, so a three-bar 16px icon is recognisably the
-    same object as the seven-bar 256px one.
-    """
-    if size <= 32:
-        return 3
-    if size <= 64:
-        return 5
-    return PADS
+def mix(a, b, t):
+    return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
 
 
-def render(size, inset_frac, bars_n=None):
-    """Draw the icon at `size`, with `inset_frac` of empty margin all round."""
-    bars_n = bars_n or PADS
-    inset = size * inset_frac
-    span = size - 2 * inset
-    gap = span / bars_n * 0.16
-    bar_w = (span - gap * (bars_n - 1)) / bars_n
-    radius = bar_w * 0.28
+def sd_round_rect(x, y, x0, y0, x1, y1, r):
+    """Signed distance from (x, y) to a rounded rectangle: negative inside."""
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    hw, hh = (x1 - x0) / 2, (y1 - y0) / 2
+    r = min(r, hw, hh)
+    qx = abs(x - cx) - (hw - r)
+    qy = abs(y - cy) - (hh - r)
+    return math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - r
 
-    # Precompute each bar's horizontal extent and colour.
-    bars = []
-    for degree in range(bars_n):
-        x0 = inset + degree * (bar_w + gap)
-        hue = round(degree * 360 / bars_n)
-        # Between the pads at rest and the pads lit - an icon wants to read at
-        # 32px, so it borrows the brightness of a pressed cap.
-        bars.append((x0, x0 + bar_w, hsl_to_rgb(hue, 0.72, 0.55)))
 
-    y0, y1 = inset, size - inset
-    rows = []
-    for y in range(size):
-        row = [BG] * size
-        for x0, x1, colour in bars:
-            for x in range(int(x0), min(int(x1) + 1, size)):
-                if not (x0 <= x < x1 and y0 <= y < y1):
+def coverage(d):
+    """How much of a pixel a shape covers, from its distance to the edge."""
+    return max(0.0, min(1.0, 0.5 - d))
+
+
+def over(dst, rgb, a):
+    """Paint `rgb` at opacity `a` over `dst`, straight (non-premultiplied) alpha."""
+    if a <= 0:
+        return dst
+    dr, dg, db, da = dst
+    out_a = a + da * (1 - a)
+    k = da * (1 - a)
+    return ((rgb[0] * a + dr * k) / out_a,
+            (rgb[1] * a + dg * k) / out_a,
+            (rgb[2] * a + db * k) / out_a,
+            out_a)
+
+
+def render(S):
+    """Draw the icon at S x S. Returns RGBA bytes, top row first."""
+    n = 3 if S <= 32 else (5 if S <= 64 else PADS)
+    small = S <= 24
+
+    m = S * 0.055
+    tile = (m, m, S - m, S - m)
+    tile_r = S * 0.225
+
+    if small:
+        plate = (m + S * 0.11, m + S * 0.15, S - m - S * 0.11, S - m - S * 0.13)
+        plate_r, pad = S * 0.06, 0.0
+    else:
+        plate = (m + S * 0.10, m + S * 0.165, S - m - S * 0.10, S - m - S * 0.13)
+        plate_r, pad = S * 0.075, S * 0.03
+
+    kx0, ky0 = plate[0] + pad, plate[1] + pad
+    kx1, ky1 = plate[2] - pad, plate[3] - pad
+    gap_frac = 0.22
+    kw = (kx1 - kx0) / (n + gap_frac * (n - 1))
+    gap = kw * gap_frac
+    key_r = kw * 0.34
+    lit = {7: 4, 5: 2}.get(n)  # the V chord, being played
+
+    keys = []
+    for i in range(n):
+        x0 = kx0 + i * (kw + gap)
+        keys.append(((x0, ky0, x0 + kw, ky1), i * 360 / n, i == lit))
+
+    edge = max(1.0, S / 64)        # width of the tile's lit/shaded rim
+    key_edge = max(0.8, S / 96)    # width of each key's top highlight
+
+    px = bytearray(S * S * 4)
+    for y in range(S):
+        fy = y + 0.5
+        for x in range(S):
+            fx = x + 0.5
+
+            d = sd_round_rect(fx, fy, *tile, tile_r)
+            a_tile = coverage(d)
+            if a_tile <= 0:
+                continue  # outside the tile: transparent
+
+            t = (fy - tile[1]) / (tile[3] - tile[1])
+            c = over((0.0, 0.0, 0.0, 0.0), mix(ALU_TOP, ALU_BOT, t), a_tile)
+
+            # A thin rim: light catching the top edge, shade along the bottom.
+            # This single rule - highlight above, shadow below - is most of
+            # what makes a flat shape read as a physical object.
+            rim = a_tile * (1 - coverage(d + edge))
+            if rim > 0:
+                c = over(c, (1.0, 1.0, 1.0), rim * 0.6 * (1 - t) ** 2)
+                c = over(c, (0.0, 0.0, 0.0), rim * 0.35 * t ** 2)
+
+            a_plate = coverage(sd_round_rect(fx, fy, *plate, plate_r))
+            if a_plate > 0:
+                tp = (fy - plate[1]) / (plate[3] - plate[1])
+                c = over(c, mix(PLATE_TOP, PLATE_BOT, tp), a_plate)
+
+            for (x0, y0, x1, y1), hue, is_lit in keys:
+                if fx < x0 - 1 or fx > x1 + 1:
                     continue
-                # Rounded corners: only the corner quadrants need a distance test.
-                cx = x0 + radius if x < x0 + radius else (x1 - radius if x > x1 - radius else x)
-                cy = y0 + radius if y < y0 + radius else (y1 - radius if y > y1 - radius else y)
-                if (x - cx) ** 2 + (y - cy) ** 2 > radius ** 2:
+                dk = sd_round_rect(fx, fy, x0, y0, x1, y1, key_r)
+                a_key = coverage(dk)
+                if a_key <= 0:
                     continue
-                row[x] = colour
-        rows.append(row)
-    return rows
+                tk = (fy - y0) / (y1 - y0)
+                sat, light = (0.95, 0.64) if is_lit else (0.70, 0.55)
+                c = over(c, hsl(hue, sat, light + 0.09 - 0.17 * tk), a_key)
+                if not small:
+                    top = a_key * (1 - coverage(dk + key_edge))
+                    c = over(c, (1.0, 1.0, 1.0), top * 0.45 * (1 - tk) ** 3)
+
+            i = (y * S + x) * 4
+            px[i:i + 4] = bytes(int(round(max(0.0, min(1.0, v)) * 255)) for v in c)
+    return px
 
 
-def downsample(rows, factor):
-    """Box filter - this is what turns the jagged edges smooth."""
-    size = len(rows) // factor
-    out = []
-    for y in range(size):
-        row = []
-        for x in range(size):
-            acc = [0, 0, 0]
-            for dy in range(factor):
-                src = rows[y * factor + dy]
-                for dx in range(factor):
-                    px = src[x * factor + dx]
-                    acc[0] += px[0]; acc[1] += px[1]; acc[2] += px[2]
-            n = factor * factor
-            row.append((acc[0] // n, acc[1] // n, acc[2] // n))
-        out.append(row)
-    return out
-
-
-def png_bytes(rows):
-    """Encode pixels as PNG and hand back the bytes, so the .ico writer below
-    can pack the same images without going through a file."""
-    size = len(rows)
-    raw = b"".join(b"\x00" + bytes(v for px in row for v in px) for row in rows)
+def png_bytes(S, px):
+    """RGBA PNG (colour type 6)."""
+    raw = bytearray()
+    for y in range(S):
+        raw.append(0)  # filter: none
+        raw += px[y * S * 4:(y + 1) * S * 4]
 
     def chunk(kind, data):
         body = kind + data
         return (struct.pack(">I", len(data)) + body
                 + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
 
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(raw, 9))
-        + chunk(b"IEND", b"")
-    )
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", S, S, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b""))
+
+
+def bmp_entry(S, px):
+    """An icon image in the original .ico bitmap form.
+
+    A PNG is allowed inside an .ico since Vista, but Microsoft only recommends
+    it for the 256px image: parts of the shell draw small PNG entries badly or
+    fall back to a generic icon. So every size below 256 goes in the classic
+    form - a BITMAPINFOHEADER, 32-bit BGRA pixels bottom row first, then a
+    one-bit AND mask marking the transparent pixels for anything too old to
+    read the alpha channel. The header claims twice the height because the
+    format counts the mask as part of the image.
+    """
+    header = struct.pack("<IiiHHIIiiII", 40, S, S * 2, 1, 32, 0, 0, 0, 0, 0, 0)
+    xor = bytearray()
+    for y in range(S - 1, -1, -1):
+        for x in range(S):
+            r, g, b, a = px[(y * S + x) * 4:(y * S + x) * 4 + 4]
+            xor += bytes((b, g, r, a))
+    stride = ((S + 31) // 32) * 4
+    mask = bytearray()
+    for y in range(S - 1, -1, -1):
+        row = bytearray(stride)
+        for x in range(S):
+            if px[(y * S + x) * 4 + 3] == 0:
+                row[x // 8] |= 0x80 >> (x % 8)
+        mask += row
+    return bytes(header + xor + mask)
 
 
 def write_ico(path, sizes):
-    """The Windows icon, used by the taskbar and the Start Menu shortcut.
-
-    An .ico is a tiny directory followed by the images themselves. Since Vista
-    those images may be PNGs rather than raw bitmaps with a separate AND mask,
-    so this needs nothing the PNG encoder above doesn't already do.
-
-    Every size is baked into the one file because Windows picks per context:
-    16px in a title bar, 32 in the taskbar, 256 in large-icon views.
-    """
-    images = [
-        png_bytes(downsample(render(s * SUPERSAMPLE, 0.10, bars_for(s)), SUPERSAMPLE))
-        for s in sizes
-    ]
+    images = []
+    for s in sizes:
+        px = render(s)
+        images.append(png_bytes(s, px) if s >= 256 else bmp_entry(s, px))
 
     header = struct.pack("<HHH", 0, 1, len(images))  # reserved, type 1 = icon
     offset = len(header) + 16 * len(images)
     entries, blob = b"", b""
-    for size, data in zip(sizes, images):
-        # A 0 in the width/height byte means 256 - the format is that old.
-        byte = size if size < 256 else 0
-        entries += struct.pack("<BBBBHHII",
-                               byte, byte, 0, 0, 1, 32, len(data), offset)
+    for s, data in zip(sizes, images):
+        byte = s if s < 256 else 0  # 0 means 256 - the format is that old
+        entries += struct.pack("<BBBBHHII", byte, byte, 0, 0, 1, 32, len(data), offset)
         blob += data
         offset += len(data)
-
     path.write_bytes(header + entries + blob)
-    print(f"{path.name}  {sizes}  {len(path.read_bytes())} bytes")
+    print(f"{path.name:<16} sizes {sizes}  {path.stat().st_size} bytes")
 
-
-def write_png(path, rows):
-    # `size` comes from the pixels, not from the caller's loop variable - it
-    # read the module-level one by accident after png_bytes was split out.
-    size = len(rows)
-    path.write_bytes(png_bytes(rows))
-    print(f"{path.relative_to(path.parent.parent)}  {size}x{size}  {len(path.read_bytes())} bytes")
-
-
-# `inset` differs per icon: a maskable icon may be cropped to a circle by the OS,
-# so its artwork has to stay inside the middle ~80%. The others can run closer
-# to the edge and look less like a stamp.
-TARGETS = [
-    ("icon-192.png", 192, 0.10),
-    ("icon-512.png", 512, 0.10),
-    ("icon-maskable-512.png", 512, 0.20),
-    ("apple-touch-icon.png", 180, 0.10),  # iOS Add to Home Screen uses this one
-]
 
 OUT.mkdir(exist_ok=True)
-for name, size, inset in TARGETS:
-    write_png(OUT / name, downsample(render(size * SUPERSAMPLE, inset), SUPERSAMPLE))
 
-# The native build's Windows icon. Embedded into musika.exe by build.rs, and
-# used by the Start Menu shortcut and the taskbar.
-write_ico(OUT / "musika.ico", [16, 32, 48, 64, 128, 256])
+# Every size Windows commonly asks for at 100-200% scaling, so it never has to
+# stretch one it was not given.
+write_ico(OUT / "musika.ico", [16, 20, 24, 32, 40, 48, 64, 256])
+
+big = render(256)
+(OUT / "musika.png").write_bytes(png_bytes(256, big))
+print(f"{'musika.png':<16} 256x256")
+
+(OUT / "musika-64.rgba").write_bytes(bytes(render(64)))
+print(f"{'musika-64.rgba':<16} 64x64 raw RGBA for the window icon")
