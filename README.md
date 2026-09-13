@@ -24,14 +24,20 @@ powershell -ExecutionPolicy Bypass -File tools\install-native.ps1
 ```
 
 That builds it, copies `musika.exe` and its icon to `%LOCALAPPDATA%\Musika`, and
-puts a shortcut in the Start Menu. The stable path matters: `native/target/` is
-gitignored and `cargo clean` wipes it, so a taskbar pin aimed there would break
-the first time you cleaned. Re-run the script after changing the code and the
-pinned copy updates in place.
+puts shortcuts in the Start Menu and on your Desktop. The stable path matters:
+`native/target/` is gitignored and `cargo clean` wipes it, so a shortcut aimed
+there would break the first time you cleaned. Re-run the script after changing
+the code and every shortcut picks up the new build.
 
-**To pin it:** Start → type "Musika" → right-click → *Pin to taskbar*. That last
-step is manual and always will be — Windows 10 deliberately removed programmatic
-taskbar pinning, so no installer can do it for you.
+The Desktop is located by asking Windows rather than assuming
+`%USERPROFILE%\Desktop` — with OneDrive backup on, it lives inside the OneDrive
+folder, and a hardcoded path would silently write the shortcut somewhere you
+never look.
+
+**Pinning is manual.** Windows does not let a program pin itself: the taskbar
+verb is gone from the shell API entirely, and on Windows 11 "Pin to Start" is
+listed but refused with *Access denied* when a script invokes it. To pin: Start →
+type "Musika" → right-click → *Pin to taskbar* or *Pin to Start*.
 
 To just run it from the source tree:
 

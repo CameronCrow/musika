@@ -74,6 +74,23 @@ $sc.Description = 'Musika - a seven-chord organ'
 $sc.Save()
 Write-Host "shortcut  $lnk"
 
+# A desktop shortcut too - the one place a program can always put itself. Ask
+# Windows where the Desktop is rather than assuming %USERPROFILE%\Desktop: with
+# OneDrive backup on, it lives inside the OneDrive folder instead.
+$desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Musika.lnk'
+$dsc = $shell.CreateShortcut($desktopLnk)
+$dsc.TargetPath = Join-Path $dest 'musika.exe'
+$dsc.WorkingDirectory = $dest
+$dsc.IconLocation = Join-Path $dest 'musika.ico'
+$dsc.Description = 'Musika - a seven-chord organ'
+$dsc.Save()
+Write-Host "desktop   $desktopLnk"
+
+# No attempt to pin to Start. Windows 11 lists a "Pin to Start" verb and then
+# refuses it with E_ACCESSDENIED when a script invokes it - checked on this
+# machine - so trying would only risk printing a success that did not happen.
+# The shortcut above already puts Musika in Start's app list and search.
+
 # Repair a taskbar pin left pointing at the old name.
 #
 # Renaming the app deleted %LOCALAPPDATA%\Heptad, which leaves any existing
@@ -131,7 +148,7 @@ if ($repaired) {
 } elseif ($pinned) {
     Write-Host "pinned to the taskbar."
 } else {
-    Write-Host "Windows 10 does not allow pinning programmatically, so the last"
-    Write-Host "step is yours: press Start, type 'Musika', right-click it and"
-    Write-Host "choose 'Pin to taskbar'."
+    Write-Host "Musika is on your Desktop and in Start. Windows does not let a"
+    Write-Host "program pin itself, so if you want it on the taskbar: press Start,"
+    Write-Host "type 'Musika', right-click it and choose 'Pin to taskbar'."
 }
