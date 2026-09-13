@@ -59,6 +59,12 @@ belongs to the native roadmap at the bottom.
 - [x] **A real icon.** An aluminium tile with a dark pocket and seven keys,
       simplified at small sizes, bitmap entries below 256px.
 
+- [x] **Beginner-friendly layering.** Loops are 1/2/4/8 bars and stop
+      themselves, with a click while recording; notes snap to eighths. Each pass
+      is a layer that keeps its own sound and arp setting, shown as a button to
+      mute or delete; backspace undoes the newest. Tempo locks while a loop
+      exists. 107 tests.
+
 ### Next, in rough order
 
 - [ ] **Editable patches** rather than fixed ones - the `Patch` struct is

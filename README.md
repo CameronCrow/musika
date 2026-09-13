@@ -57,10 +57,12 @@ crackle under full polyphony.
 | | |
 |---|---|
 | **Chords** | `A S D F G H J`, or the number row `1`–`7`, for as long as you hold the key. Or click and drag across the pads, or use a touchscreen — every finger is its own chord. |
-| **Record** | `space` — see [The looper](#the-looper). |
+| **Record** | `space` — see [Layering with the looper](#layering-with-the-looper). |
 | **Play / stop** | `esc` |
-| **Clear** | Unbound on purpose. It wipes the loop with no undo, so it shouldn't be one stray keystroke away. |
-| **Arpeggiator** | `q` toggles it; pattern and tempo sit beside it. |
+| **Undo layer** | `backspace` — takes back the newest layer and leaves the rest playing. |
+| **Clear all** | Unbound on purpose. It wipes every layer at once, so it shouldn't be one stray keystroke away. |
+| **Loop length / tempo** | 1, 2, 4 or 8 bars, 40–240 bpm. Set before you record; fixed while a loop exists. |
+| **Arpeggiator** | `q` toggles it; the pattern sits beside it. |
 | **Octave** | `-` and `=`. Range −3 to +1; it starts one octave below middle C. |
 | **Key / mode** | All 12 roots, major or minor. |
 | **Patch** | Eleven sounds — see [The patches](#the-patches). |
@@ -75,32 +77,58 @@ pop songs. Play each for a slow count of four.
 Touch support is written against egui's touch events but has not yet been tried
 on touch hardware.
 
-## The looper
+## Layering with the looper
 
-It works like a guitarist's loop pedal. Press **record**, then play: recording
-starts on your first chord, not on the button, so there is no dead air at the
-front of the loop while you get your hands ready. Press **record** again to close
-the loop — its length is however long you played — and it starts repeating
-straight away. Press **record** once more to overdub on top, and again to stop
-overdubbing. **Stop**, **play** and **clear** do what they say.
+You don't need to have used a looper before. The line along the top always says
+what to press next.
 
-The bar under the pads shows where the loop is — amber while playing, red while
-overdubbing — and pads light up as the loop plays them.
+1. **Pick a length and a tempo.** 4 bars at 120 bpm is the default — room for a
+   four-chord progression, one chord a bar.
+2. **Press `space`, then play.** Recording starts on your first chord, not the
+   button, so there's no dead air while you get your hands ready. A quiet click
+   counts the beats and the bar under the pads fills up in red. When the bars are
+   up it **stops by itself** and starts looping. (Press `space` early to finish at
+   the end of the bar you're in.)
+3. **Change the sound, maybe switch the arp on, and press `space` again.** Play
+   along for one time round the loop. That becomes **layer 2**, and it stops
+   recording by itself when the loop comes back to where you started.
+4. **Keep going,** up to eight layers.
+
+Every layer appears as a button above the controls — `2  pluck · arp`:
+
+- **Each layer keeps its own sound and arp setting.** A warm pad, then a pluck
+  arpeggio over it, then a bass line: changing the sound or the arp only affects
+  what you play next.
+- **Click a layer to mute it**, click again to bring it back. **×** deletes it.
+- **`backspace` undoes the newest layer** — including one you're halfway through
+  recording — and leaves everything under it playing.
+
+Two things make it hard to play out of time:
+
+- **The loop is a whole number of bars.** A pedal whose loop is "however long you
+  held the button" needs the button hit on the exact beat, and a loop closed a
+  little late hiccups on every repeat, under every layer you ever add.
+- **Notes snap to the nearest eighth note,** starts and ends both. A chord a touch
+  early or late loops in time anyway, and an arpeggiated layer lines up with a
+  block-chord one because they share the same grid.
+
+Tempo and length are locked while a loop exists, because its notes sit on that
+grid. Clear the loop to change them.
 
 **What is recorded is not audio.** Each event is "these pitches started this many
-samples into the loop and were held this long", and playback performs it again.
-That is a few bytes a chord rather than megabytes, it never degrades however many
-times you overdub, and if you switch the arpeggiator on later the loop arpeggiates
-too.
+samples into the loop and were held this long, with this sound", and playback
+performs it again. That is a few bytes a chord rather than megabytes, it never
+degrades however many layers you stack, and deleting a layer is deleting its
+events.
 
 **Pitches, not chord numbers.** What you played was "chord 4 *of C major*", and
 the key is half of that — so a loop stays put when you change key to play over it,
-and a part overdubbed in A minor keeps its own key.
+and a layer played in A minor keeps its own key.
 
-An overdub is heard from the next time round, not in the pass you played it in. It
-joins the loop at the wrap, the one moment the playback position resets anyway, so
-folding it in can never skip or double an event. A chord held over the end of the
-loop is cut at the boundary rather than spilling into the next cycle.
+A new layer is heard from the next time round, not in the pass you played it in.
+It joins the loop at the wrap, the one moment the playback position resets anyway,
+so folding it in can never skip or double an event. A chord held over the end of
+the loop is cut at the boundary rather than spilling into the next cycle.
 
 ### Why it is exact
 
@@ -128,7 +156,8 @@ music rather than someone leaning on an organ. The harmony doesn't change at all
   turnaround stumble — you hear a limp instead of a pulse.
 - At 120 bpm and 48kHz a step is exactly 12,000 samples, every time.
 - Turning the arp on or off lets go of anything held, because a ringing block
-  chord can't be turned into an arpeggio halfway through a note.
+  chord can't be turned into an arpeggio halfway through a note. Layers already
+  recorded don't change: each plays the way it was recorded.
 
 ## Your keys
 
@@ -146,7 +175,8 @@ would otherwise ring forever.
 
 ## Settings
 
-Key, mode, octave, patch, the arpeggiator, and every key binding are saved to
+Key, mode, octave, patch, tempo, loop length, the arpeggiator, and every key
+binding are saved to
 `%APPDATA%\Musika\settings.txt`: plain `name = value` lines, safe to edit in
 Notepad, and deleting the file resets everything.
 
@@ -263,15 +293,15 @@ prints nothing.
 cd native && cargo test
 ```
 
-94 tests, no framework beyond the one built into Cargo.
+107 tests, no framework beyond the one built into Cargo.
 
 | | |
 |---|---|
 | **20 — theory** | Scale generation, triad stacking, octave wrapping in both directions, MIDI→frequency, chord naming, arpeggiator patterns, and the quality sequences below in major and minor across all twelve keys. |
 | **19 — voice and reverb** | That detuned oscillators actually beat (with `raw` as a control that they do *not*), that panning holds power constant, that a hard filter sweep at high resonance stays finite, that the reverb tail decays rather than running away, that every patch is audible and distinct. |
-| **14 — looper** | To the exact sample: events land on their recorded sample every cycle, an overdub joins at the wrap, a held-over note is cut at the boundary, stop and play restart from the top — and recording never grows past its preallocated storage. |
+| **23 — looper** | To the exact sample: recording stops itself after its bars, an early press finishes the bar, notes snap to eighths, a layer is one pass heard from the next time round, undo takes back only the newest layer (or the half-recorded one), deleting a middle layer keeps the ones above it, mute, the eight-layer limit, the click's accents — and recording never grows past its preallocated storage. |
 | **10 — arpeggiator** | The first note on the press, a second chord joining the first one's grid, each pattern's order, a looped chord playing only inside its span, bad tempos clamped. |
-| **19 — engine** | End to end through the audio thread: a recorded loop coming back round on the exact sample, its pad lighting up, a key change not cutting the loop off, a loop recorded as chords arpeggiating once the arp is on, full polyphony never clipping. |
+| **23 — engine** | End to end through the audio thread: a recorded loop coming back round on the exact sample, its pad lighting up, a key change not cutting the loop off, each layer keeping its own sound and arp setting, the click only while recording, the tempo locked under a loop, full polyphony never clipping. |
 | **5 — settings** | A round trip, and a file where every line is broken differently still loading the one good value. |
 | **7 — controls** | Default keys surviving being saved by name, rebinding stealing a key, input ids never colliding with the engine's own. |
 

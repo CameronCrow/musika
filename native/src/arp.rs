@@ -56,6 +56,8 @@ struct Hold {
     /// Counts from the moment this chord went down, not from a global beat, so
     /// every chord starts its pattern on its own first note.
     step: usize,
+    /// The sound its notes play with - a looped layer keeps its own.
+    patch: u8,
 }
 
 pub struct Arp {
@@ -109,7 +111,7 @@ impl Arp {
         self.bpm
     }
 
-    #[cfg(test)]
+    /// One eighth note in samples - also the looper's grid.
     pub fn step_len(&self) -> u64 {
         self.step_len
     }
@@ -123,7 +125,7 @@ impl Arp {
         self.holds.iter().any(|h| h.from <= now && now < h.until)
     }
 
-    fn add(&mut self, now: u64, id: Option<u64>, chord: Chord, until: u64) {
+    fn add(&mut self, now: u64, id: Option<u64>, chord: Chord, until: u64, patch: u8) {
         if chord.is_empty() || self.holds.len() >= MAX_HOLDS {
             return;
         }
@@ -133,17 +135,17 @@ impl Arp {
         if !self.sounding(now) {
             self.next_step = now;
         }
-        self.holds.push(Hold { id, chord, from: now, until, step: 0 });
+        self.holds.push(Hold { id, chord, from: now, until, step: 0, patch });
     }
 
     /// A finger went down. It holds until `hold_off`.
-    pub fn hold_on(&mut self, now: u64, id: u64, chord: Chord) {
-        self.add(now, Some(id), chord, u64::MAX);
+    pub fn hold_on(&mut self, now: u64, id: u64, chord: Chord, patch: u8) {
+        self.add(now, Some(id), chord, u64::MAX, patch);
     }
 
     /// A chord whose whole span is already known - the looper's.
-    pub fn schedule(&mut self, now: u64, chord: Chord, until: u64) {
-        self.add(now, None, chord, until);
+    pub fn schedule(&mut self, now: u64, chord: Chord, until: u64, patch: u8) {
+        self.add(now, None, chord, until, patch);
     }
 
     pub fn hold_off(&mut self, now: u64, id: u64) {
@@ -159,13 +161,9 @@ impl Arp {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.holds.clear();
-    }
-
-    /// Call once per sample. `emit(pitch, pan, gate)` receives every note that
-    /// starts on this sample and how many samples it should last.
-    pub fn tick(&mut self, now: u64, mut emit: impl FnMut(i32, f32, u64)) {
+    /// Call once per sample. `emit(pitch, pan, gate, patch)` receives every note
+    /// that starts on this sample and how many samples it should last.
+    pub fn tick(&mut self, now: u64, mut emit: impl FnMut(i32, f32, u64, u8)) {
         if self.holds.is_empty() || now < self.next_step {
             return;
         }
@@ -178,7 +176,7 @@ impl Arp {
                 // the same layout a block chord gets, so switching the
                 // arpeggiator on does not move the sound in the stereo field.
                 let pan = if n > 1 { i as f32 / (n - 1) as f32 * 2.0 - 1.0 } else { 0.0 };
-                emit(h.chord.notes[i], pan, gate);
+                emit(h.chord.notes[i], pan, gate, h.patch);
                 h.step += 1;
             }
         }
@@ -206,7 +204,7 @@ mod tests {
     fn run(a: &mut Arp, from: u64, to: u64) -> Vec<(u64, i32)> {
         let mut out = vec![];
         for now in from..to {
-            a.tick(now, |p, _, _| out.push((now, p)));
+            a.tick(now, |p, _, _, _| out.push((now, p)));
         }
         out
     }
@@ -222,14 +220,14 @@ mod tests {
     fn the_first_note_plays_on_the_press_not_a_step_later() {
         let mut a = Arp::new(SR, 400);
         run(&mut a, 0, 5_000); // time passes with nothing held
-        a.hold_on(5_000, 1, c_major());
+        a.hold_on(5_000, 1, c_major(), 0);
         assert_eq!(run(&mut a, 5_000, 5_001), vec![(5_000, 60)]);
     }
 
     #[test]
     fn up_plays_the_chord_in_order_one_step_apart() {
         let mut a = Arp::new(SR, 400);
-        a.hold_on(0, 1, c_major());
+        a.hold_on(0, 1, c_major(), 0);
         assert_eq!(
             run(&mut a, 0, 12_000 * 4),
             vec![(0, 60), (12_000, 64), (24_000, 67), (36_000, 60)]
@@ -240,13 +238,13 @@ mod tests {
     fn down_and_up_down_follow_their_patterns() {
         let mut a = Arp::new(SR, 400);
         a.pattern = ArpPattern::Down;
-        a.hold_on(0, 1, c_major());
+        a.hold_on(0, 1, c_major(), 0);
         let got: Vec<i32> = run(&mut a, 0, 12_000 * 3).iter().map(|x| x.1).collect();
         assert_eq!(got, vec![67, 64, 60]);
 
         let mut a = Arp::new(SR, 400);
         a.pattern = ArpPattern::UpDown;
-        a.hold_on(0, 1, c_major());
+        a.hold_on(0, 1, c_major(), 0);
         let got: Vec<i32> = run(&mut a, 0, 12_000 * 6).iter().map(|x| x.1).collect();
         assert_eq!(got, vec![60, 64, 67, 64, 60, 64]);
     }
@@ -254,9 +252,9 @@ mod tests {
     #[test]
     fn a_second_chord_joins_the_first_one_s_grid() {
         let mut a = Arp::new(SR, 400);
-        a.hold_on(0, 1, c_major());
+        a.hold_on(0, 1, c_major(), 0);
         run(&mut a, 0, 5_000);
-        a.hold_on(5_000, 2, Chord::new(&[67, 71, 74]));
+        a.hold_on(5_000, 2, Chord::new(&[67, 71, 74]), 0);
         // Nothing at 5000 - it waits for the shared step at 12000.
         let got = run(&mut a, 5_000, 12_001);
         assert_eq!(got, vec![(12_000, 64), (12_000, 67)]);
@@ -265,7 +263,7 @@ mod tests {
     #[test]
     fn letting_go_stops_the_notes() {
         let mut a = Arp::new(SR, 400);
-        a.hold_on(0, 1, c_major());
+        a.hold_on(0, 1, c_major(), 0);
         run(&mut a, 0, 13_000);
         a.hold_off(13_000, 1);
         assert!(run(&mut a, 13_000, 100_000).is_empty());
@@ -274,7 +272,7 @@ mod tests {
     #[test]
     fn a_looped_chord_plays_only_inside_its_span() {
         let mut a = Arp::new(SR, 400);
-        a.schedule(1_000, c_major(), 30_000);
+        a.schedule(1_000, c_major(), 30_000, 0);
         let got = run(&mut a, 0, 100_000);
         assert_eq!(got, vec![(1_000, 60), (13_000, 64), (25_000, 67)]);
     }
@@ -282,8 +280,8 @@ mod tests {
     #[test]
     fn releasing_fingers_leaves_the_loop_running() {
         let mut a = Arp::new(SR, 400);
-        a.hold_on(0, 1, c_major());
-        a.schedule(0, Chord::new(&[48]), 100_000);
+        a.hold_on(0, 1, c_major(), 0);
+        a.schedule(0, Chord::new(&[48]), 100_000, 0);
         run(&mut a, 0, 1);
         a.release_live(1);
         let got = run(&mut a, 1, 50_000);
@@ -309,7 +307,7 @@ mod tests {
         let mut a = Arp::new(SR, 400);
         let cap = a.holds.capacity();
         for id in 0..(MAX_HOLDS as u64 * 3) {
-            a.hold_on(0, id, c_major());
+            a.hold_on(0, id, c_major(), 0);
         }
         assert_eq!(a.holds.len(), MAX_HOLDS);
         assert_eq!(a.holds.capacity(), cap, "holds reallocated");

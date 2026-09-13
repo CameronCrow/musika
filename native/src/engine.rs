@@ -31,20 +31,20 @@
 //! ---------------------------------------------------------------------------
 //!
 //! Commands go in through a channel. What comes back - the loop's state, its
-//! position, which pads it is playing - is a handful of atomics the UI reads
-//! each frame. Neither side ever waits for the other.
+//! position, its layers, which pads it is playing - is a handful of atomics the
+//! UI reads each frame. Neither side ever waits for the other.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::arp::Arp;
-use crate::looper::{LoopState, Looper};
+use crate::looper::{LoopState, Looper, MAX_LAYERS};
 use crate::reverb::Reverb;
 use crate::theory::{ArpPattern, Chord};
-use crate::voice::{PATCHES, Patch, Voice};
+use crate::voice::{PATCHES, Voice};
 
 /// Level of one note before the master stage.
 const VOICE_GAIN: f32 = 0.20;
@@ -57,6 +57,13 @@ const MAX_PENDING_OFFS: usize = 256;
 
 /// Pads currently lit by the loop.
 const MAX_FLASHES: usize = 128;
+
+/// The metronome: a short blip, higher on the first beat of each bar, quiet
+/// enough to sit under the chords rather than on top of them.
+const CLICK_GAIN: f32 = 0.10;
+const CLICK_HZ_BAR: f32 = 1760.0;
+const CLICK_HZ_BEAT: f32 = 1320.0;
+const CLICK_SECONDS: f32 = 0.012;
 
 /// Voice ids at or above this belong to notes the engine started itself - the
 /// looper's and the arpeggiator's - rather than to a finger. Letting go of every
@@ -72,13 +79,29 @@ pub enum Msg {
     /// Let go of every live input - key, octave and patch changes use this.
     ReleaseLive,
     SetPatch(usize),
-    /// The looper's record button: arm, close the loop, overdub.
+    /// The looper's record button: arm, finish early, add a layer.
     Pedal,
     PlayStop,
     ClearLoop,
+    /// Take back the newest layer.
+    Undo,
+    RemoveLayer(u8),
+    ToggleMute(u8),
+    /// How many bars the next loop will be.
+    SetBars(u8),
     SetArp(bool),
     SetArpPattern(ArpPattern),
     SetTempo(f32),
+}
+
+/// One layer as the UI sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayerView {
+    pub patch: usize,
+    pub arp: bool,
+    pub muted: bool,
+    /// Still being recorded.
+    pub recording: bool,
 }
 
 /// What the audio thread reports back, as atomics so reading them never blocks.
@@ -87,8 +110,13 @@ pub struct Status {
     loop_state: AtomicU8,
     /// Position round the loop, scaled to 0..=65535.
     loop_pos: AtomicU32,
+    loop_bars: AtomicU8,
     /// Bit `n` is set while the loop is playing pad `n`.
     looping_pads: AtomicU8,
+    layer_count: AtomicU8,
+    /// One byte per layer: patch in the low five bits, then arp, muted and
+    /// recording flags.
+    layers: AtomicU64,
 }
 
 impl Status {
@@ -100,8 +128,28 @@ impl Status {
         self.loop_pos.load(Relaxed) as f32 / 65535.0
     }
 
+    pub fn loop_bars(&self) -> u8 {
+        self.loop_bars.load(Relaxed)
+    }
+
     pub fn pad_looping(&self, degree: usize) -> bool {
         degree < 8 && self.looping_pads.load(Relaxed) & (1 << degree) != 0
+    }
+
+    pub fn layers(&self) -> Vec<LayerView> {
+        let packed = self.layers.load(Relaxed);
+        let count = (self.layer_count.load(Relaxed) as usize).min(MAX_LAYERS);
+        (0..count)
+            .map(|k| {
+                let b = (packed >> (8 * k)) as u8;
+                LayerView {
+                    patch: (b & 0x1F) as usize,
+                    arp: b & 0x20 != 0,
+                    muted: b & 0x40 != 0,
+                    recording: b & 0x80 != 0,
+                }
+            })
+            .collect()
     }
 }
 
@@ -118,7 +166,8 @@ fn chord_pan(i: usize, n: usize) -> f32 {
 struct AudioState {
     voices: Vec<Voice>,
     reverb: Reverb,
-    patch: Patch,
+    /// The sound live playing uses. Looped layers carry their own.
+    patch: usize,
     looper: Looper,
     arp: Arp,
     rx: Receiver<Msg>,
@@ -131,25 +180,35 @@ struct AudioState {
     pending_offs: Vec<(u64, u64)>,
     /// (pad, sample it stops being lit on).
     flashes: Vec<(u8, u64)>,
-    /// Notes the looper and arpeggiator asked for this sample: (id, pitch, pan).
-    requests: Vec<(u64, i32, f32)>,
+    /// Notes the looper and arpeggiator asked for this sample: (id, pitch, pan, patch).
+    requests: Vec<(u64, i32, f32, usize)>,
+    click_env: f32,
+    click_phase: f32,
+    click_inc: f32,
+    click_decay: f32,
     /// Every note started, with the sample it started on - so the tests can
     /// check timing to the exact sample. Compiled out of the real program.
     #[cfg(test)]
     started: Vec<(u64, i32)>,
+    #[cfg(test)]
+    started_patches: Vec<usize>,
+    #[cfg(test)]
+    clicks: Vec<u64>,
 }
 
 impl AudioState {
-    fn new(rx: Receiver<Msg>, sample_rate: f32, patch: Patch, status: Arc<Status>) -> Self {
+    fn new(rx: Receiver<Msg>, sample_rate: f32, patch: usize, status: Arc<Status>) -> Self {
         // The shortest note worth playing: long enough for any patch's attack
         // to open, so a looped stab or a fast arpeggio is a note, not a click.
         let min_note = (sample_rate * 0.008) as u64;
+        let arp = Arp::new(sample_rate, min_note);
         AudioState {
             voices: Vec::with_capacity(MAX_VOICES),
             reverb: Reverb::new(sample_rate),
-            patch,
-            looper: Looper::new(min_note),
-            arp: Arp::new(sample_rate, min_note),
+            patch: patch.min(PATCHES.len() - 1),
+            // The looper's grid is the arpeggiator's step, so the two agree.
+            looper: Looper::new(min_note, arp.step_len()),
+            arp,
             rx,
             status,
             sample_rate,
@@ -158,20 +217,32 @@ impl AudioState {
             pending_offs: Vec::with_capacity(MAX_PENDING_OFFS),
             flashes: Vec::with_capacity(MAX_FLASHES),
             requests: Vec::with_capacity(MAX_VOICES),
+            click_env: 0.0,
+            click_phase: 0.0,
+            click_inc: 0.0,
+            click_decay: (-1.0 / (CLICK_SECONDS * sample_rate)).exp(),
             #[cfg(test)]
             started: Vec::new(),
+            #[cfg(test)]
+            started_patches: Vec::new(),
+            #[cfg(test)]
+            clicks: Vec::new(),
         }
     }
 
-    fn spawn(&mut self, id: u64, midi: i32, pan: f32) {
+    fn spawn(&mut self, id: u64, midi: i32, pan: f32, patch: usize) {
         if self.voices.len() >= MAX_VOICES {
             return;
         }
         let freq = crate::theory::midi_to_freq(midi);
+        let patch = patch.min(PATCHES.len() - 1);
         self.voices
-            .push(Voice::new(id, freq, pan, &self.patch, self.sample_rate));
+            .push(Voice::new(id, freq, pan, &PATCHES[patch], self.sample_rate));
         #[cfg(test)]
-        self.started.push((self.clock, midi));
+        {
+            self.started.push((self.clock, midi));
+            self.started_patches.push(patch);
+        }
     }
 
     fn release_live_voices(&mut self) {
@@ -186,15 +257,17 @@ impl AudioState {
             let now = self.clock;
             match msg {
                 Msg::NoteOn { id, chord, degree } => {
+                    let patch = self.patch;
                     if self.arp.on {
-                        self.arp.hold_on(now, id, chord);
+                        self.arp.hold_on(now, id, chord, patch as u8);
                     } else {
                         for (i, &midi) in chord.as_slice().iter().enumerate() {
-                            self.spawn(id, midi, chord_pan(i, chord.len()));
+                            self.spawn(id, midi, chord_pan(i, chord.len()), patch);
                         }
                     }
                     // No-op unless the looper is armed or recording.
-                    self.looper.note_on(now, id, chord, degree);
+                    self.looper
+                        .note_on(now, id, chord, degree, patch as u8, self.arp.on);
                 }
                 Msg::NoteOff { id } => {
                     for v in self.voices.iter_mut().filter(|v| v.id == id) {
@@ -211,23 +284,36 @@ impl AudioState {
                 Msg::SetPatch(i) => {
                     // Voices already sounding keep the patch they were born
                     // with; converting one mid-note would click.
-                    self.patch = PATCHES[i.min(PATCHES.len() - 1)];
+                    self.patch = i.min(PATCHES.len() - 1);
                 }
                 Msg::Pedal => self.looper.pedal(now),
                 Msg::PlayStop => self.looper.play_stop(now),
                 Msg::ClearLoop => self.looper.clear(),
+                Msg::Undo => self.looper.undo(),
+                Msg::RemoveLayer(k) => self.looper.remove_layer(k as usize),
+                Msg::ToggleMute(k) => self.looper.toggle_mute(k as usize),
+                Msg::SetBars(bars) => self.looper.bars = bars.clamp(1, 8),
                 Msg::SetArp(on) => {
                     if on != self.arp.on {
                         // A chord that started as a block would end as an
                         // arpeggio, or the other way round. Let held notes go
-                        // instead of trying to convert one mid-note.
+                        // instead of trying to convert one mid-note. Looped
+                        // layers are untouched: each keeps the setting it was
+                        // recorded with.
                         self.release_live_voices();
-                        self.arp.clear();
+                        self.arp.release_live(now);
                         self.arp.on = on;
                     }
                 }
                 Msg::SetArpPattern(p) => self.arp.pattern = p,
-                Msg::SetTempo(bpm) => self.arp.set_tempo(bpm),
+                Msg::SetTempo(bpm) => {
+                    // A loop's notes sit on the grid of the tempo they were
+                    // recorded at, so the tempo is locked while one exists.
+                    if !self.looper.state.has_loop() {
+                        self.arp.set_tempo(bpm);
+                        self.looper.set_step(self.arp.step_len());
+                    }
+                }
             }
         }
     }
@@ -239,7 +325,7 @@ impl AudioState {
         // `retain` reuses the existing allocation, so reaping voices is free.
         self.voices.retain(|v| !v.finished());
 
-        let wet_amount = self.patch.reverb;
+        let wet_amount = PATCHES[self.patch].reverb;
 
         for frame in out.chunks_mut(channels) {
             let now = self.clock;
@@ -254,17 +340,17 @@ impl AudioState {
                 if self.flashes.len() < MAX_FLASHES {
                     self.flashes.push((event.degree, until));
                 }
-                if self.arp.on {
+                if event.arp {
                     // A recorded chord is a hold over a known span - exactly
-                    // what the arpeggiator eats - so loops arpeggiate too.
-                    self.arp.schedule(now, event.chord, until);
+                    // what the arpeggiator eats.
+                    self.arp.schedule(now, event.chord, until, event.patch);
                 } else {
                     let id = self.next_auto_id;
                     self.next_auto_id += 1;
                     let n = event.chord.len();
                     for (i, &midi) in event.chord.as_slice().iter().enumerate() {
                         if requests.len() < MAX_VOICES {
-                            requests.push((id, midi, chord_pan(i, n)));
+                            requests.push((id, midi, chord_pan(i, n), event.patch as usize));
                         }
                     }
                     if self.pending_offs.len() < MAX_PENDING_OFFS {
@@ -274,22 +360,32 @@ impl AudioState {
             });
 
             // The arpeggiator plays any step that falls on this sample.
-            self.arp.tick(now, |midi, pan, gate| {
+            self.arp.tick(now, |midi, pan, gate, patch| {
                 let id = self.next_auto_id;
                 self.next_auto_id += 1;
                 if requests.len() < MAX_VOICES {
-                    requests.push((id, midi, pan));
+                    requests.push((id, midi, pan, patch as usize));
                 }
                 if self.pending_offs.len() < MAX_PENDING_OFFS {
                     self.pending_offs.push((id, now + gate));
                 }
             });
 
-            for &(id, midi, pan) in requests.iter() {
-                self.spawn(id, midi, pan);
+            for &(id, midi, pan, patch) in requests.iter() {
+                self.spawn(id, midi, pan, patch);
             }
             requests.clear();
             self.requests = requests;
+
+            // The metronome, only while a layer is being recorded.
+            if let Some(first_of_bar) = self.looper.beat(now) {
+                let hz = if first_of_bar { CLICK_HZ_BAR } else { CLICK_HZ_BEAT };
+                self.click_env = 1.0;
+                self.click_phase = 0.0;
+                self.click_inc = std::f32::consts::TAU * hz / self.sample_rate;
+                #[cfg(test)]
+                self.clicks.push(now);
+            }
 
             // Release anything whose time is up. swap_remove never allocates.
             let mut i = 0;
@@ -320,6 +416,16 @@ impl AudioState {
                 r += wr * wet_amount;
             }
 
+            // The click goes in dry, after the reverb: a metronome ringing
+            // round a room is harder to play to, not easier.
+            if self.click_env > 1e-4 {
+                let c = self.click_phase.sin() * self.click_env * CLICK_GAIN;
+                self.click_phase += self.click_inc;
+                self.click_env *= self.click_decay;
+                l += c;
+                r += c;
+            }
+
             // Soft clip. tanh squashes peaks smoothly instead of letting them
             // hit the rails and crackle - the job a limiter does, in one line.
             let l = (l * 1.2).tanh() * 0.75;
@@ -347,11 +453,25 @@ impl AudioState {
             .flashes
             .iter()
             .fold(0u8, |m, &(degree, _)| m | (1u8 << degree.min(7)));
-        self.status.loop_state.store(self.looper.state as u8, Relaxed);
-        self.status
-            .loop_pos
-            .store((self.looper.position(now) * 65535.0) as u32, Relaxed);
-        self.status.looping_pads.store(mask, Relaxed);
+        let (mut count, mut packed) = (0u8, 0u64);
+        for k in 0..MAX_LAYERS {
+            if let Some((layer, recording)) = self.looper.layer(k) {
+                let byte = (layer.patch as u64 & 0x1F)
+                    | (layer.arp as u64) << 5
+                    | (layer.muted as u64) << 6
+                    | (recording as u64) << 7;
+                packed |= byte << (8 * k);
+                count = k as u8 + 1;
+            }
+        }
+        let s = &self.status;
+        s.loop_state.store(self.looper.state as u8, Relaxed);
+        s.loop_pos
+            .store((self.looper.position(now).clamp(0.0, 1.0) * 65535.0) as u32, Relaxed);
+        s.loop_bars.store(self.looper.loop_bars(), Relaxed);
+        s.looping_pads.store(mask, Relaxed);
+        s.layers.store(packed, Relaxed);
+        s.layer_count.store(count, Relaxed);
     }
 }
 
@@ -367,7 +487,8 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn start(patch: Patch) -> Result<Engine, String> {
+    /// `patch` is an index into `PATCHES`.
+    pub fn start(patch: usize) -> Result<Engine, String> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -449,7 +570,7 @@ impl Engine {
 /// `musika --render` uses this to write a WAV of the same engine the speakers
 /// get - a far better way to judge a patch than any test could be.
 pub fn render(
-    patch: Patch,
+    patch: usize,
     sample_rate: f32,
     seconds: f32,
     mut events: Vec<(f32, Msg)>,
@@ -491,7 +612,7 @@ mod tests {
     fn harness(patch_index: usize) -> (Sender<Msg>, AudioState) {
         let (tx, rx) = channel::<Msg>();
         let status = Arc::new(Status::default());
-        (tx, AudioState::new(rx, SR, PATCHES[patch_index], status))
+        (tx, AudioState::new(rx, SR, patch_index, status))
     }
 
     fn triad(root: i32) -> Chord {
@@ -653,14 +774,17 @@ mod tests {
 
     // --- the looper, through the whole engine ---------------------------------
 
-    /// Record chord 0 for 10,000 samples, closing the loop at 48,000.
+    /// At 240bpm an eighth note is 6,000 samples, a beat 12,000 and a bar
+    /// 48,000. Records chord 0 for 10,000 samples into a one-bar loop, which
+    /// closes itself on sample 48,000 - the first sample of the next `frames`.
     fn record_one_chord(tx: &Sender<Msg>, st: &mut AudioState) {
+        tx.send(Msg::SetTempo(240.0)).unwrap();
+        tx.send(Msg::SetBars(1)).unwrap();
         tx.send(Msg::Pedal).unwrap();
         tx.send(Msg::NoteOn { id: 1, chord: triad(60), degree: 0 }).unwrap();
         frames(st, 10_000);
         tx.send(Msg::NoteOff { id: 1 }).unwrap();
         frames(st, 38_000);
-        tx.send(Msg::Pedal).unwrap();
     }
 
     #[test]
@@ -685,25 +809,98 @@ mod tests {
         frames(&mut st, 256);
         assert!(st.status.pad_looping(0), "pad 0 should be lit by the loop");
         assert!(!st.status.pad_looping(4));
-        frames(&mut st, 20_000); // past the 10,000-sample chord
+        frames(&mut st, 20_000); // past the chord, snapped to 12,000 samples
         assert!(!st.status.pad_looping(0), "pad stayed lit after the chord ended");
     }
 
     #[test]
     fn letting_go_of_live_input_does_not_cut_the_loop_off() {
         let (tx, mut st) = harness(0);
-        // A long chord this time: held for 40,000 of the loop's 48,000.
+        // A long chord this time: held for most of the one-bar loop.
+        tx.send(Msg::SetTempo(240.0)).unwrap();
+        tx.send(Msg::SetBars(1)).unwrap();
         tx.send(Msg::Pedal).unwrap();
         tx.send(Msg::NoteOn { id: 1, chord: triad(60), degree: 0 }).unwrap();
         frames(&mut st, 40_000);
         tx.send(Msg::NoteOff { id: 1 }).unwrap();
         frames(&mut st, 8_000);
-        tx.send(Msg::Pedal).unwrap();
-        frames(&mut st, 1_000); // the loop's chord is sounding again
+        frames(&mut st, 1_000); // the loop has closed and its chord sounds again
 
         tx.send(Msg::ReleaseLive).unwrap(); // e.g. a key change
         frames(&mut st, 10_000);
         assert!(frames(&mut st, 2_000) > 0.05, "the looped chord was cut off");
+    }
+
+    #[test]
+    fn the_click_plays_on_the_beat_only_while_recording() {
+        let (tx, mut st) = harness(0);
+        record_one_chord(&tx, &mut st);
+        assert_eq!(st.clicks, vec![0, 12_000, 24_000, 36_000]);
+        frames(&mut st, 60_000); // playing, not recording
+        assert_eq!(st.clicks.len(), 4, "a playing loop clicked");
+    }
+
+    #[test]
+    fn each_layer_keeps_the_sound_it_was_recorded_with() {
+        let (tx, mut st) = harness(0);
+        record_one_chord(&tx, &mut st); // with raw
+        tx.send(Msg::SetPatch(4)).unwrap();
+        st.started_patches.clear();
+        frames(&mut st, 1); // the loop comes round
+        tx.send(Msg::NoteOn { id: 2, chord: triad(64), degree: 2 }).unwrap();
+        frames(&mut st, 1); // and a live chord on the new sound
+        assert_eq!(st.started_patches, vec![0, 0, 0, 4, 4, 4]);
+    }
+
+    #[test]
+    fn a_block_chord_layer_stays_a_block_when_the_arp_goes_on() {
+        let (tx, mut st) = harness(0);
+        record_one_chord(&tx, &mut st);
+        tx.send(Msg::SetArp(true)).unwrap();
+        st.started.clear();
+        frames(&mut st, 12_000);
+        assert_eq!(st.started, vec![(48_000, 60), (48_000, 64), (48_000, 67)]);
+    }
+
+    #[test]
+    fn an_arpeggiated_layer_keeps_arpeggiating_after_the_arp_goes_off() {
+        let (tx, mut st) = harness(0);
+        tx.send(Msg::SetTempo(240.0)).unwrap(); // steps of 6,000
+        tx.send(Msg::SetBars(1)).unwrap();
+        tx.send(Msg::SetArp(true)).unwrap();
+        tx.send(Msg::Pedal).unwrap();
+        tx.send(Msg::NoteOn { id: 1, chord: triad(60), degree: 0 }).unwrap();
+        frames(&mut st, 24_000);
+        tx.send(Msg::NoteOff { id: 1 }).unwrap();
+        frames(&mut st, 24_000);
+
+        tx.send(Msg::SetArp(false)).unwrap();
+        st.started.clear();
+        frames(&mut st, 12_000);
+        assert_eq!(st.started, vec![(48_000, 60), (54_000, 64)]);
+    }
+
+    #[test]
+    fn the_ui_sees_layers_and_undo_unlocks_the_tempo() {
+        let (tx, mut st) = harness(0);
+        record_one_chord(&tx, &mut st);
+        frames(&mut st, 1);
+        assert_eq!(
+            st.status.layers(),
+            vec![LayerView { patch: 0, arp: false, muted: false, recording: false }]
+        );
+        assert_eq!(st.status.loop_bars(), 1);
+
+        tx.send(Msg::SetTempo(60.0)).unwrap();
+        frames(&mut st, 1);
+        assert_eq!(st.arp.step_len(), 6_000, "tempo changed under a loop");
+
+        tx.send(Msg::Undo).unwrap();
+        tx.send(Msg::SetTempo(60.0)).unwrap();
+        frames(&mut st, 1);
+        assert_eq!(st.status.loop_state(), LoopState::Idle);
+        assert!(st.status.layers().is_empty());
+        assert_eq!(st.arp.step_len(), 24_000);
     }
 
     // --- the arpeggiator, through the whole engine ----------------------------
@@ -726,23 +923,5 @@ mod tests {
         tx.send(Msg::NoteOn { id: 1, chord: triad(60), degree: 0 }).unwrap();
         frames(&mut st, 24_000 * 2);
         assert_eq!(st.started, vec![(0, 67), (24_000, 64)]);
-    }
-
-    #[test]
-    fn a_loop_recorded_as_chords_arpeggiates_once_the_arp_is_on() {
-        let (tx, mut st) = harness(0);
-        // Recorded as a block chord, held 24,000 samples, loop 48,000 long.
-        tx.send(Msg::Pedal).unwrap();
-        tx.send(Msg::NoteOn { id: 1, chord: triad(60), degree: 0 }).unwrap();
-        frames(&mut st, 24_000);
-        tx.send(Msg::NoteOff { id: 1 }).unwrap();
-        frames(&mut st, 24_000);
-        tx.send(Msg::Pedal).unwrap();
-        tx.send(Msg::SetArp(true)).unwrap();
-        st.started.clear();
-
-        frames(&mut st, 24_000);
-        // Steps at the loop start and one step later; the hold ends at 72,000.
-        assert_eq!(st.started, vec![(48_000, 60), (60_000, 64)]);
     }
 }

@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use crate::arp::{MAX_BPM, MIN_BPM};
+use crate::looper::BAR_CHOICES;
 use crate::theory::{ArpPattern, Mode};
 
 pub const OCTAVE_MIN: i32 = -3;
@@ -26,6 +27,8 @@ pub struct Settings {
     pub arp_on: bool,
     pub arp_pattern: ArpPattern,
     pub bpm: f32,
+    /// How many bars a new loop records for.
+    pub bars: u8,
     /// Action name -> key names, for each action the file mentions. An action
     /// that is missing gets its default keys; one listed with no keys stays
     /// deliberately unbound.
@@ -44,6 +47,8 @@ impl Default for Settings {
             arp_on: false,
             arp_pattern: ArpPattern::Up,
             bpm: 120.0,
+            // Four bars holds a four-chord progression, one chord a bar.
+            bars: 4,
             bindings: Vec::new(),
         }
     }
@@ -139,6 +144,13 @@ impl Settings {
                         }
                     }
                 }
+                "bars" => {
+                    if let Ok(v) = value.parse::<u8>() {
+                        if BAR_CHOICES.contains(&v) {
+                            s.bars = v;
+                        }
+                    }
+                }
                 _ => {
                     if let Some(action) = name.strip_prefix("bind.") {
                         let keys = value
@@ -167,6 +179,7 @@ impl Settings {
         out += &format!("arp = {}\n", if self.arp_on { "on" } else { "off" });
         out += &format!("arp_pattern = {}\n", pattern_name(self.arp_pattern));
         out += &format!("bpm = {}\n", self.bpm.round());
+        out += &format!("bars = {}\n", self.bars);
         for (action, keys) in &self.bindings {
             out += &format!("bind.{action} = {}\n", keys.join(", "));
         }
@@ -188,6 +201,7 @@ mod tests {
             arp_on: true,
             arp_pattern: ArpPattern::UpDown,
             bpm: 96.0,
+            bars: 2,
             bindings: vec![
                 ("pad1".into(), vec!["A".into(), "1".into()]),
                 ("clear".into(), vec![]),
@@ -207,9 +221,10 @@ mod tests {
         // middle must still land; the rest must leave their defaults alone.
         let s = Settings::parse(
             "key = 14\nmode = sideways\nthis line has no equals\noctave = 99\n\
-             patch = bell\nbpm = NaN\narp_pattern = diagonal\narp = maybe\n",
+             patch = bell\nbpm = NaN\narp_pattern = diagonal\narp = maybe\nbars = 3\n",
         );
         let d = Settings::default();
+        assert_eq!(s.bars, d.bars, "3 bars is not on offer");
         assert_eq!(s.key_pitch, d.key_pitch, "key 14 is not a key");
         assert_eq!(s.mode, d.mode);
         assert_eq!(s.octave, OCTAVE_MAX, "octave is clamped, not rejected");

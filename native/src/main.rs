@@ -35,7 +35,7 @@ mod voice;
 
 use eframe::egui::{self, Color32, FontId, Key, Pos2, Rect, RichText};
 use engine::{Engine, Msg, Status};
-use looper::LoopState;
+use looper::{BAR_CHOICES, LoopState, MAX_LAYERS};
 use settings::{OCTAVE_MAX, OCTAVE_MIN, Settings};
 use theory::{ArpPattern, Chord, Mode};
 use voice::PATCHES;
@@ -67,6 +67,7 @@ enum Action {
     Pad(usize),
     Record,
     PlayStop,
+    Undo,
     Clear,
     Arp,
     OctaveDown,
@@ -74,7 +75,7 @@ enum Action {
 }
 
 /// Every bindable action, in the order bindings are stored.
-const ACTIONS: [Action; 13] = [
+const ACTIONS: [Action; 14] = [
     Action::Pad(0),
     Action::Pad(1),
     Action::Pad(2),
@@ -84,6 +85,7 @@ const ACTIONS: [Action; 13] = [
     Action::Pad(6),
     Action::Record,
     Action::PlayStop,
+    Action::Undo,
     Action::Clear,
     Action::Arp,
     Action::OctaveDown,
@@ -98,6 +100,7 @@ impl Action {
             Action::Pad(i) => PADS[i.min(6)],
             Action::Record => "record",
             Action::PlayStop => "playstop",
+            Action::Undo => "undo",
             Action::Clear => "clear",
             Action::Arp => "arp",
             Action::OctaveDown => "octave_down",
@@ -111,6 +114,7 @@ impl Action {
             Action::Pad(i) => format!("pad {}", i + 1),
             Action::Record => "record".into(),
             Action::PlayStop => "play / stop".into(),
+            Action::Undo => "undo layer".into(),
             Action::Clear => "clear".into(),
             Action::Arp => "arp".into(),
             Action::OctaveDown => "octave down".into(),
@@ -125,8 +129,9 @@ impl Action {
 
 /// The home row to play with, and the number row as well, because the pads are
 /// labelled I..vii and sometimes the thing in your head is "chord five" rather
-/// than "the G key". Clear starts unbound on purpose: it wipes the loop with no
-/// undo, and that should not be one stray keystroke away.
+/// than "the G key". Clear starts unbound on purpose: it wipes every layer at
+/// once, and that should not be one stray keystroke away. Undo, which takes back
+/// one layer, is on backspace.
 fn default_bindings() -> Vec<Vec<Key>> {
     use Key::*;
     vec![
@@ -139,6 +144,7 @@ fn default_bindings() -> Vec<Vec<Key>> {
         vec![J, Num7],
         vec![Space],
         vec![Escape],
+        vec![Backspace],
         vec![],
         vec![Q],
         vec![Minus],
@@ -173,6 +179,7 @@ fn key_label(key: Key) -> String {
     match key {
         Key::Space => "space".into(),
         Key::Escape => "esc".into(),
+        Key::Backspace => "bksp".into(),
         Key::Minus => "-".into(),
         Key::Equals => "=".into(),
         other => {
@@ -225,6 +232,7 @@ struct Musika {
     arp_on: bool,
     arp_pattern: ArpPattern,
     bpm: f32,
+    bars: u8,
 
     bindings: Vec<Vec<Key>>,
     rebinding: bool,
@@ -248,7 +256,7 @@ impl Musika {
 
         let s = Settings::load();
         let patch_index = PATCHES.iter().position(|p| p.name == s.patch).unwrap_or(1);
-        let (engine, error) = match Engine::start(PATCHES[patch_index]) {
+        let (engine, error) = match Engine::start(patch_index) {
             Ok(e) => (Some(e), None),
             Err(e) => (None, Some(e)),
         };
@@ -264,6 +272,7 @@ impl Musika {
             arp_on: s.arp_on,
             arp_pattern: s.arp_pattern,
             bpm: s.bpm,
+            bars: s.bars,
             bindings: bindings_from(&s),
             rebinding: false,
             binding_target: None,
@@ -275,6 +284,7 @@ impl Musika {
         };
         app.rebuild_chords();
         app.send(Msg::SetTempo(app.bpm));
+        app.send(Msg::SetBars(app.bars));
         app.send(Msg::SetArpPattern(app.arp_pattern));
         app.send(Msg::SetArp(app.arp_on));
         app
@@ -295,6 +305,7 @@ impl Musika {
             arp_on: self.arp_on,
             arp_pattern: self.arp_pattern,
             bpm: self.bpm,
+            bars: self.bars,
             bindings: ACTIONS
                 .iter()
                 .zip(&self.bindings)
@@ -404,6 +415,7 @@ impl Musika {
             Action::Pad(_) => {}
             Action::Record => self.send(Msg::Pedal),
             Action::PlayStop => self.send(Msg::PlayStop),
+            Action::Undo => self.send(Msg::Undo),
             Action::Clear => self.send(Msg::ClearLoop),
             Action::Arp => self.set_arp(!self.arp_on),
             Action::OctaveDown => self.set_octave(self.octave - 1),
@@ -594,7 +606,14 @@ impl Musika {
 
     // --- drawing ---------------------------------------------------------------
 
-    fn legend(&self, loop_state: LoopState) -> (String, Color32) {
+    /// What to press for `action`, for the legend - its key, or the button's
+    /// name if it has no key.
+    fn key_hint(&self, action: Action, button: &str) -> String {
+        let keys = keys_label(&self.bindings[action.index()]);
+        if keys.is_empty() { button.to_string() } else { keys }
+    }
+
+    fn legend(&self, status: Option<&Status>) -> (String, Color32) {
         if let Some(err) = &self.error {
             return (err.clone(), HOT);
         }
@@ -618,19 +637,42 @@ impl Musika {
             text += &format!("   ·   oct {:+}", self.octave);
         }
         if self.arp_on {
-            text += &format!("   ·   arp {:.0} bpm", self.bpm);
+            text += "   ·   arp";
         }
-        let looping = match loop_state {
-            LoopState::Idle => None,
-            LoopState::Armed => Some("play a chord to start recording"),
-            LoopState::Recording => Some("recording"),
-            LoopState::Playing => Some("looping"),
-            LoopState::Overdub => Some("overdubbing"),
-            LoopState::Stopped => Some("loop stopped"),
+
+        // Always say what to do next. Someone who has never used a looper
+        // should be able to make one by reading this line and nothing else.
+        let Some(s) = status else {
+            return (text, INK_DIM);
         };
-        if let Some(l) = looping {
-            text += &format!("   ·   {l}");
-        }
+        let record = self.key_hint(Action::Record, "record");
+        let layers = s.layers();
+        let bars = s.loop_bars().max(1);
+        let hint = match s.loop_state() {
+            LoopState::Idle => format!("press {record} to start a loop"),
+            LoopState::Armed => {
+                format!("play a chord to start recording   ·   {}", bars_label(self.bars))
+            }
+            LoopState::Recording => {
+                let bar = ((s.loop_position() * bars as f32) as u8 + 1).min(bars);
+                format!("recording layer 1   ·   bar {bar} of {bars}")
+            }
+            LoopState::Playing if layers.len() >= MAX_LAYERS => {
+                format!("{MAX_LAYERS} layers, the most there can be   ·   undo one to add another")
+            }
+            LoopState::Playing => format!("looping   ·   {record} records another layer on top"),
+            LoopState::Overdub => {
+                let n = match layers.last() {
+                    Some(l) if l.recording => layers.len(),
+                    _ => layers.len() + 1,
+                };
+                format!("recording layer {n}   ·   until the loop comes round again")
+            }
+            LoopState::Stopped => {
+                format!("stopped   ·   {} to play", self.key_hint(Action::PlayStop, "play"))
+            }
+        };
+        text += &format!("   ·   {hint}");
         (text, INK_DIM)
     }
 
@@ -674,19 +716,23 @@ impl Musika {
         false
     }
 
-    fn controls(&mut self, ui: &mut egui::Ui, loop_state: LoopState) {
+    fn controls(&mut self, ui: &mut egui::Ui, loop_state: LoopState, layers: usize) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
             // Transport.
             let (record_label, hot) = match loop_state {
-                LoopState::Idle => ("● record", false),
-                LoopState::Armed => ("● armed", true),
-                LoopState::Recording => ("● close loop", true),
-                LoopState::Playing | LoopState::Stopped => ("● overdub", false),
-                LoopState::Overdub => ("● end overdub", true),
+                // Words only: egui's built-in fonts have no ● or ↶, and a red
+                // fill says "recording" plainer than any symbol would.
+                LoopState::Idle => ("record", false),
+                LoopState::Armed => ("armed", true),
+                LoopState::Recording => ("end early", true),
+                LoopState::Playing | LoopState::Stopped => ("add layer", false),
+                LoopState::Overdub => ("stop recording", true),
             };
-            if self.control(ui, Action::Record, record_label, true, hot.then_some(HOT)) {
+            let full = matches!(loop_state, LoopState::Playing | LoopState::Stopped)
+                && layers >= MAX_LAYERS;
+            if self.control(ui, Action::Record, record_label, !full, hot.then_some(HOT)) {
                 self.do_action(Action::Record);
             }
             let running = loop_state.is_running();
@@ -695,9 +741,51 @@ impl Musika {
             if self.control(ui, Action::PlayStop, play_label, can_play, None) {
                 self.do_action(Action::PlayStop);
             }
-            let can_clear = !matches!(loop_state, LoopState::Idle | LoopState::Armed);
-            if self.control(ui, Action::Clear, "clear", can_clear, None) {
+            let can_undo = loop_state != LoopState::Idle;
+            if self.control(ui, Action::Undo, "undo layer", can_undo, None) {
+                self.do_action(Action::Undo);
+            }
+            if self.control(ui, Action::Clear, "clear all", loop_state.has_loop(), None) {
                 self.do_action(Action::Clear);
+            }
+
+            ui.separator();
+
+            // Length and tempo belong to the loop: chosen before recording,
+            // then fixed until it is gone.
+            let free = !loop_state.has_loop();
+            let scope = ui.add_enabled_ui(free, |ui| {
+                let mut bars = self.bars;
+                egui::ComboBox::from_id_salt("bars")
+                    .selected_text(bars_label(bars))
+                    .width(64.0)
+                    .show_ui(ui, |ui| {
+                        for b in BAR_CHOICES {
+                            ui.selectable_value(&mut bars, b, bars_label(b));
+                        }
+                    });
+                if bars != self.bars {
+                    self.bars = bars;
+                    self.send(Msg::SetBars(bars));
+                    self.dirty = true;
+                }
+                let mut bpm = self.bpm;
+                ui.add(
+                    egui::Slider::new(&mut bpm, arp::MIN_BPM..=arp::MAX_BPM)
+                        .step_by(1.0)
+                        .fixed_decimals(0)
+                        .suffix(" bpm"),
+                );
+                if bpm != self.bpm {
+                    self.bpm = bpm;
+                    self.send(Msg::SetTempo(bpm));
+                    self.dirty = true;
+                }
+            });
+            if !free {
+                scope
+                    .response
+                    .on_hover_text("a loop keeps the length and tempo it was recorded at - clear it to change them");
             }
 
             ui.separator();
@@ -760,18 +848,6 @@ impl Musika {
                 self.send(Msg::SetArpPattern(pattern));
                 self.dirty = true;
             }
-            let mut bpm = self.bpm;
-            ui.add(
-                egui::Slider::new(&mut bpm, arp::MIN_BPM..=arp::MAX_BPM)
-                    .step_by(1.0)
-                    .fixed_decimals(0)
-                    .suffix(" bpm"),
-            );
-            if bpm != self.bpm {
-                self.bpm = bpm;
-                self.send(Msg::SetTempo(bpm));
-                self.dirty = true;
-            }
 
             ui.separator();
 
@@ -783,6 +859,52 @@ impl Musika {
             }
             if ui.add(button).clicked() {
                 self.set_rebinding(!self.rebinding);
+            }
+        });
+    }
+
+    /// One button per layer: its number, its sound, whether it arpeggiates.
+    /// Click to mute it, × to delete it.
+    fn layers(&mut self, ui: &mut egui::Ui, status: Option<&Status>) {
+        let layers = status.map(|s| s.layers()).unwrap_or_default();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            ui.label(RichText::new("LAYERS").monospace().color(INK_DIM));
+            if layers.is_empty() {
+                ui.label(
+                    RichText::new(
+                        "each thing you record becomes a layer here, keeping the sound you played it with",
+                    )
+                    .color(INK_DIM),
+                );
+                return;
+            }
+            for (k, layer) in layers.iter().enumerate() {
+                let mut text = format!("{}  {}", k + 1, PATCHES[layer.patch.min(PATCHES.len() - 1)].name);
+                if layer.arp {
+                    text += " · arp";
+                }
+                let (fill, ink, hint) = if layer.recording {
+                    (HOT, Color32::BLACK, "recording")
+                } else if layer.muted {
+                    (SHELL_LO, INK_DIM, "muted - click to hear it again")
+                } else {
+                    (SHELL_HI, INK, "click to mute")
+                };
+                let mut label = RichText::new(text).color(ink);
+                if layer.muted {
+                    label = label.strikethrough();
+                }
+                let button = ui.add(egui::Button::new(label).fill(fill)).on_hover_text(hint);
+                if button.clicked() && !layer.recording {
+                    self.send(Msg::ToggleMute(k as u8));
+                }
+                let delete = ui
+                    .add(egui::Button::new(RichText::new("×").color(INK_DIM)).frame(false))
+                    .on_hover_text("delete this layer");
+                if delete.clicked() {
+                    self.send(Msg::RemoveLayer(k as u8));
+                }
             }
         });
     }
@@ -878,7 +1000,8 @@ impl Musika {
             );
         }
 
-        // Where the loop is, so overdubbing in time is possible at all.
+        // Where the loop is, so playing in time is possible at all - red while
+        // recording, amber while playing - with a notch at every bar line.
         let bar = Rect::from_min_max(
             egui::pos2(full.left() + 4.0, full.bottom() - bar_h),
             egui::pos2(full.right() - 4.0, full.bottom()),
@@ -888,16 +1011,27 @@ impl Musika {
             let state = s.loop_state();
             let (fraction, colour) = match state {
                 LoopState::Playing => (s.loop_position(), LAMP),
-                LoopState::Overdub => (s.loop_position(), HOT),
-                LoopState::Recording => (1.0, HOT.gamma_multiply(0.5)),
+                LoopState::Overdub | LoopState::Recording => (s.loop_position(), HOT),
                 _ => (0.0, LAMP),
             };
             if fraction > 0.0 {
                 let filled = Rect::from_min_size(bar.min, egui::vec2(bar.width() * fraction, bar.height()));
                 painter.rect_filled(filled, 3.0, colour);
             }
+            let bars = (if state.has_loop() { s.loop_bars() } else { self.bars }) as usize;
+            for b in 1..bars {
+                let x = bar.left() + bar.width() * b as f32 / bars as f32;
+                painter.line_segment(
+                    [egui::pos2(x, bar.top()), egui::pos2(x, bar.bottom())],
+                    egui::Stroke::new(2.0, PLATE),
+                );
+            }
         }
     }
+}
+
+fn bars_label(bars: u8) -> String {
+    if bars == 1 { "1 bar".into() } else { format!("{bars} bars") }
 }
 
 fn pattern_label(p: ArpPattern) -> &'static str {
@@ -957,7 +1091,7 @@ impl eframe::App for Musika {
         let status = self.engine.as_ref().map(|e| e.status.clone());
         let loop_state = status.as_ref().map(|s| s.loop_state()).unwrap_or(LoopState::Idle);
 
-        let (legend, legend_colour) = self.legend(loop_state);
+        let (legend, legend_colour) = self.legend(status.as_deref());
         egui::Panel::top("legend").show(ui, |ui| {
             ui.add_space(6.0);
             ui.vertical_centered(|ui| {
@@ -966,10 +1100,17 @@ impl eframe::App for Musika {
             ui.add_space(6.0);
         });
 
+        let layer_count = status.as_ref().map(|s| s.layers().len()).unwrap_or(0);
         egui::Panel::bottom("controls").show(ui, |ui| {
             ui.add_space(8.0);
-            self.controls(ui, loop_state);
+            self.controls(ui, loop_state, layer_count);
             ui.add_space(8.0);
+        });
+        // Added after the controls, so it sits just above them.
+        egui::Panel::bottom("layers").show(ui, |ui| {
+            ui.add_space(6.0);
+            self.layers(ui, status.as_deref());
+            ui.add_space(6.0);
         });
 
         egui::CentralPanel::default().show(ui, |ui| self.pads(ui, status.as_deref()));
@@ -1038,7 +1179,7 @@ fn render_demo(path: &str) -> Result<(), String> {
     let per_patch = progression.len() as f32 * HOLD + tail;
 
     let mut all: Vec<f32> = Vec::new();
-    for patch in PATCHES.iter() {
+    for (index, patch) in PATCHES.iter().enumerate() {
         let mut events = Vec::new();
         for (i, &degree) in progression.iter().enumerate() {
             let t = i as f32 * HOLD;
@@ -1050,7 +1191,7 @@ fn render_demo(path: &str) -> Result<(), String> {
             events.push((t + HOLD * 0.94, Msg::NoteOff { id: i as u64 }));
         }
         println!("rendering '{}'...", patch.name);
-        all.extend_from_slice(&engine::render(*patch, SR, per_patch, events));
+        all.extend_from_slice(&engine::render(index, SR, per_patch, events));
     }
 
     write_wav(path, &all, SR as u32)?;
@@ -1076,7 +1217,7 @@ fn main() -> eframe::Result<()> {
     // and exits. "The window appeared" is not the same as "the sound card said
     // yes", and this is the difference.
     if std::env::args().any(|a| a == "--probe") {
-        match Engine::start(PATCHES[1]) {
+        match Engine::start(1) {
             Ok(e) => {
                 println!("device      {}", e.device_name);
                 println!("sample rate {} Hz", e.sample_rate);
