@@ -981,8 +981,18 @@ impl eframe::App for Musika {
             self.dirty = false;
         }
 
-        // Keys are polled and the loop bar moves, so keep drawing.
-        ctx.request_repaint();
+        // Redraw continuously only while something is actually moving. egui
+        // already wakes for every key press, key release and focus change, so
+        // held keys do not need a redraw loop to be noticed - and redrawing
+        // flat out cost an idle instrument about a sixth of a CPU core. A
+        // playing loop does animate: the bar moves and pads light as it plays
+        // them. Otherwise, glance at the audio thread's status a few times a
+        // second in case it changed something on its own.
+        if loop_state.is_running() || loop_state == LoopState::Recording {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
     }
 }
 
